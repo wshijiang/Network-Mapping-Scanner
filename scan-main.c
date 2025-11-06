@@ -118,10 +118,10 @@ char* receive_target(int read_fd) {
 
 
 int main(int argc, char* argv[]) {
-    if (argc != 6)
-    {
-        printf("参数不足，只有%d\n", argc);
-    }
+    //if (argc != 6)
+    //{
+    //    printf("参数不足，只有%d\n", argc);
+    //}
 	setbuf(stdout, NULL); // 禁用缓冲，确保输出立即显示
     if (!sign_signal_func()) return 0;                    //注册信号处理函数
     printf("开始\n");
@@ -157,35 +157,36 @@ int main(int argc, char* argv[]) {
         exit(1);
     } 
     printf("分配scan data成功\n");
-	ScanConfig* scan_config = malloc(sizeof(ScanConfig));
+	//ScanConfig* scan_config = malloc(sizeof(ScanConfig));
 
-    if (!scan_config)
-    {
-        free(data);
-        PQfinish(conn);
-        clear_cache_manager(manager);
-        exit(1);
-    }
-    printf("分配scan config成功\n");
+ //   if (!scan_config)
+ //   {
+ //       free(data);
+ //       PQfinish(conn);
+ //       clear_cache_manager(manager);
+ //       exit(1);
+ //   }
+ //   printf("分配scan config成功\n");
 
-    scan_config->target_ip = strdup(argv[1]);
-    scan_config->target_port = strdup(argv[2]);
-    scan_config->scanner_path = strdup(argv[5]);
-    scan_config->banner_scan_ip = strdup(argv[4]);
-    scan_config->rate = strdup(argv[3]);
+    //移除了scan_config
+    //scan_config->target_ip = strdup(argv[1]);
+    //scan_config->target_port = strdup(argv[2]);
+    //scan_config->scanner_path = strdup(argv[5]);
+    //scan_config->banner_scan_ip = strdup(argv[4]);
+    //scan_config->rate = strdup(argv[3]);
 
-    if (!check_scan_config(scan_config))
-    {
-        free_scan_config(scan_config);
-        free(data);
-        PQfinish(conn);
-        clear_cache_manager(manager);
-        exit(1);
-    }
+    //if (!check_scan_config(scan_config))
+    //{
+    //    free_scan_config(scan_config);
+    //    free(data);
+    //    PQfinish(conn);
+    //    clear_cache_manager(manager);
+    //    exit(1);
+    //}
     
     if (!stop_signal)
     {
-        scan(conn, data, manager, scan_config);
+        scan(conn, data, manager);
         printf("扫描完成\n");
     }
     
@@ -196,7 +197,7 @@ int main(int argc, char* argv[]) {
     free(data);
     PQfinish(conn);
     clear_cache_manager(manager);
-    free_scan_config(scan_config);
+    //free_scan_config(scan_config);
     printf("垃圾清理完毕\n");
 
     return 0;
@@ -205,7 +206,7 @@ int main(int argc, char* argv[]) {
 
 
 // 新增函数：直接从文件描述符读取而不是FILE*
-int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* manager, ScanConfig* scan_config, const char* scanner_name)
+int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* manager, const char* scanner_name)
 {
     char buffer[8192];
     char line_buffer[8192];
@@ -280,7 +281,7 @@ int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* ma
 /*
 先创建一个子线程，然后在子线程中执行扫描
 */
-int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager, ScanConfig* scan_config)
+int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
 {
     pid_t pid;
     int parent_to_child[2];
@@ -309,10 +310,20 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager, ScanConfig* sc
         setbuf(stdout, NULL);
         static unsigned int scan_seed = 1;
         sleep(1); //等待1秒
+        int wait_n = 0;  //重试期间等待次数，避免大量无用输出
         while (!stop_signal) {
             char* target = receive_target(parent_to_child[0]);
             if (!target) {
+                wait_n += 1;
                 fprintf(stderr, "Failed to receive target: %s\n", strerror(errno));
+                if (wait_n < 10) {
+                    sleep(wait_n * 2);
+                }
+                else {
+                    //当重试10次以上后直接退出
+                    send_stop_email(); //发送停止提示邮件
+                    stop_signal = 1;
+                }
                 continue;
             }
 
@@ -324,8 +335,11 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager, ScanConfig* sc
                 fflush(stdout);
                 break;  // 跳出循环但不退出进程
             }
-            char seed_str[16];
-            snprintf(seed_str, sizeof(seed_str), "%u", scan_seed++);
+
+            //删除了masscan种子
+
+            //char seed_str[16];
+            //snprintf(seed_str, sizeof(seed_str), "%u", scan_seed++);
 
             // 执行扫描
             pid_t child_pid;
@@ -372,13 +386,12 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager, ScanConfig* sc
 
             char* scan_argv[] = {
                 "a",
-                "-p80,22,53,8000,7601",
+                "-p0-65535",
                 target,
-                "--rate=10000",
+                "--rate=40000",
                 "--banner",
-                "--source-ip",
-                (char*)scan_config->banner_scan_ip,
-                "--seed", seed_str,
+                "--source-port",
+                "61000",
                 NULL
             };
 
@@ -503,7 +516,7 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager, ScanConfig* sc
             free(http_result);
 
             // 处理扫描输出 - 修改为直接从文件描述符读取
-            if (!scan_output_format_fd(conn, child_to_parent[0], ScanData, manager, scan_config, "masscan")) {
+            if (!scan_output_format_fd(conn, child_to_parent[0], ScanData, manager, "masscan")) {
                 printf("scan_output_format 失败，退出\n");
                 clear_cache_data(manager);
                 close(parent_to_child[1]);
@@ -532,22 +545,22 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager, ScanConfig* sc
 }
 
 
-int check_scan_config(ScanConfig* scan_config)
-{
-    if (!scan_config->target_ip || !scan_config->target_port || !scan_config->scanner_path || !scan_config->banner_scan_ip || !scan_config->rate)
-    {
-        return 0;
-    }
-    return 1;
-}
+//int check_scan_config(ScanConfig* scan_config)
+//{
+//    if (!scan_config->target_ip || !scan_config->target_port || !scan_config->scanner_path || !scan_config->banner_scan_ip || !scan_config->rate)
+//    {
+//        return 0;
+//    }
+//    return 1;
+//}
 
-int free_scan_config(ScanConfig* scan_config)
-{
-    if (scan_config->target_ip) free(scan_config->target_ip);
-    if (scan_config->target_port) free(scan_config->target_port);
-    if (scan_config->scanner_path) free(scan_config->scanner_path);
-    if (scan_config->banner_scan_ip) free(scan_config->banner_scan_ip);
-    if (scan_config->rate) free(scan_config->rate);
-    return 1;
-}
+//int free_scan_config(ScanConfig* scan_config)
+//{
+//    if (scan_config->target_ip) free(scan_config->target_ip);
+//    if (scan_config->target_port) free(scan_config->target_port);
+//    if (scan_config->scanner_path) free(scan_config->scanner_path);
+//    if (scan_config->banner_scan_ip) free(scan_config->banner_scan_ip);
+//    if (scan_config->rate) free(scan_config->rate);
+//    return 1;
+//}
 

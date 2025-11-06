@@ -25,19 +25,19 @@ typedef struct ScanData
     unsigned port;
 } ScanData;
 
-typedef struct ScanConfig
-{
-    char* scanner_path; // masscan可执行文件路径
-    char* banner_scan_ip;
-	char* target_ip; // 扫描目标IP
-    char* target_port;
-    char* rate;      // 扫描速率
-} ScanConfig;
+//typedef struct ScanConfig
+//{
+//    char* scanner_path; // masscan可执行文件路径
+//    char* banner_scan_ip;
+//	char* target_ip; // 扫描目标IP
+//    char* target_port;
+//    char* rate;      // 扫描速率
+//} ScanConfig;
 
 
 
-int scan(PGconn*, ScanData*, CacheManager*, ScanConfig*);
-int scan_output_format(PGconn*, FILE*, ScanData*, CacheManager*, ScanConfig*, const char*);
-int check_scan_config(ScanConfig*);
-int free_scan_config(ScanConfig*);
+int scan(PGconn*, ScanData*, CacheManager*);
+int scan_output_format(PGconn*, FILE*, ScanData*, CacheManager*, const char*);
+//int check_scan_config(ScanConfig*);
+//int free_scan_config(ScanConfig*);
 //int check_write(const CacheManager*);
