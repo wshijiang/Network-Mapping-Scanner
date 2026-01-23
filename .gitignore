@@ -1,8 +1,8 @@
 # Prerequisites
 *.d
 
-scan-test.sln
-scan-test.vcxproj
+*.sln
+*.vcxproj
 .vs/
 obj/
 # User-specific files
