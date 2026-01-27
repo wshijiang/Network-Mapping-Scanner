@@ -1,5 +1,5 @@
 ﻿CC := gcc
-LDFLAGS := -lcurl -libpq
+LDFLAGS := -lcurl -lpq
 CFLAGS := -Wall -O2 -MMD -MP
 
 TARGET := scanner
