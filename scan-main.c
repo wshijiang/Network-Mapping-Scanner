@@ -15,6 +15,7 @@
 #include "db-postgresql.h"
 #include "http_conn.h"
 #include "cJSON.h"
+#include "tomlc17.h"
 
 //#include "uthash.h" //哈希表库
 int stop_signal = 0;
@@ -117,23 +118,150 @@ char* receive_target(int read_fd) {
 
 
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) 
+{
+
+    printf("获取环境变量测试\n");
+    char* env;
+    env = getenv("scanner_debug");
+    if (env == NULL) {
+        printf("没有环境变量 scanner_debug\n");
+    }
+
+    if (env) {
+        printf("DEBUG 开启\n");
+    }
+    printf("scanner_debug = %s\n", env);
     //if (argc != 6)
     //{
     //    printf("参数不足，只有%d\n", argc);
     //}
+
+    toml_result_t config_result = toml_parse_file_ex("config.toml");
+
+    //检查配置文件读取是否正常
+
+    if (!config_result.ok) {
+        fprintf(stderr, "配置文件错误\n");
+        fprintf(stderr, "%s\n", config_result.errmsg);
+        exit(1);
+    }
+
+    //从配置文件读取扫描器配置
+    toml_datum_t server = toml_seek(config_result.toptab, "scanner.c_server");
+    toml_datum_t port = toml_seek(config_result.toptab, "scanner.c_port");
+    toml_datum_t rate = toml_seek(config_result.toptab, "scanner.rate");
+
+    //从配置文件读取邮件通知配置
+    toml_datum_t api = toml_seek(config_result.toptab, "email_notify.api");
+    toml_datum_t send_email = toml_seek(config_result.toptab, "email_notify.send_email");
+    toml_datum_t email = toml_seek(config_result.toptab, "email_notify.email");
+
+    //从配置文件读取数据库配置
+    toml_datum_t d_host = toml_seek(config_result.toptab, "database.host");
+    toml_datum_t d_port = toml_seek(config_result.toptab, "database.port");
+    toml_datum_t d_name = toml_seek(config_result.toptab, "database.db_name");
+    toml_datum_t d_username = toml_seek(config_result.toptab, "database.username");
+    toml_datum_t d_password = toml_seek(config_result.toptab, "database.password");
+
+
+    if (server.type != TOML_STRING) {
+        fprintf(stderr, "server.type 不为 string\n");
+        toml_free(config_result);
+        exit(1);
+    }
+    printf("scanner.c_server = %s\n", server.u.s);
+
+
+    if (port.type != TOML_INT64) {
+        fprintf(stderr, "port.type 不为 int64\n");
+        toml_free(config_result);
+        exit(1);
+    }
+    printf("scanner.c_port = %ld\n", port.u.int64);
+
+
+    if (rate.type != TOML_INT64) {
+        fprintf(stderr, "rate.type 不为 int64\n");
+        toml_free(config_result);
+        exit(1);
+    }
+    printf("scanner.rate = %ld\n", rate.u.int64);
+
+
+    if (api.type != TOML_STRING) {
+        fprintf(stderr, "api.type 不为 string\n");
+        toml_free(config_result);
+        exit(1);
+    }
+    printf("email_notify.api = %s\n", api.u.s);
+
+    if (send_email.type != TOML_STRING) {
+        fprintf(stderr, "send_email.type 不为 string\n");
+        toml_free(config_result);
+        exit(1);
+    }
+    printf("email_notify.send_email = %s\n", send_email.u.s);
+
+    if (email.type != TOML_STRING) {
+        fprintf(stderr, "email.type 不为 string\n");
+        toml_free(config_result);
+        exit(1);
+    }
+
+    printf("email_notify.email = %s\n", email.u.s);
+
+    if (d_host.type != TOML_STRING) {
+        fprintf(stderr, "[database] => host 字段错误\n");
+        toml_free(config_result);
+        exit(1);
+    }
+
+    if (d_port.type != TOML_INT64) {
+        fprintf(stderr, "[database] => port 字段错误\n");
+        toml_free(config_result);
+        exit(1);
+    }
+
+    if (d_name.type != TOML_STRING) {
+        fprintf(stderr, "[database] => name 字段错误\n");
+        toml_free(config_result);
+        exit(1);
+    }
+
+    printf("database.host = %s\ndatabase.port = %ld\ndatabase.db_name = %s\n", d_host.u.s, d_port.u.int64, d_name.u.s);
+
+    if (d_username.type != TOML_STRING) {
+        fprintf(stderr, "[database] => username 字段错误\n");
+        toml_free(config_result);
+        exit(1);
+    }
+    printf("database.username = %s\n", d_username.u.s);
+
+    if (d_password.type != TOML_STRING) {
+        fprintf(stderr, "[database] => password 字段错误");
+        toml_free(config_result);
+        exit(1);
+    }
+    printf("\n\n通过所有检查\n\n");
+
+    toml_free(config_result);
+
+    
+    exit(1);
+
 	setbuf(stdout, NULL); // 禁用缓冲，确保输出立即显示
     if (!sign_signal_func()) return 0;                    //注册信号处理函数
-    printf("开始\n");
+    printf("启动中\n");
 
     CacheManager* manager = create_cache_manager();
     DbConnectInfo db_info;
-    db_info.ip = "127.0.0.1";               // 主机地址
-    db_info.port = 54321;                   // 端口
+    db_info.ip = d_host.u.s;                // 主机地址
+    db_info.port = d_port.u.int64;          // 端口
     db_info.db_type = 0;                    // 数据库类型，0为postgresql
-    db_info.db_name = "scan";               // 数据库名称
-    db_info.username = "wsj";               // 用户名
-    db_info.password = "123456789";         // 密码
+    db_info.db_name = d_name.u.s;           // 数据库名称
+    db_info.username = d_username.u.s;      // 用户名
+    db_info.password = d_password.u.s;      // 密码
     PGconn* conn = create_conn(&db_info);
     if (!conn)
     {
@@ -197,6 +325,7 @@ int main(int argc, char* argv[]) {
     free(data);
     PQfinish(conn);
     clear_cache_manager(manager);
+    toml_free(config_result);
     //free_scan_config(scan_config);
     printf("垃圾清理完毕\n");
 
