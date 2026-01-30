@@ -1,0 +1,16 @@
+[scanner]
+c_server = "example.com"
+c_port = 80
+rate = 10000000
+
+[email_notify]
+api = "api"
+send_email = "test@example.com"
+email = "test1@example.com"
+
+[database]
+host = "127.0.0.1"
+port = 54321
+db_name = "scan"
+username = "username"
+password = "123456789"
