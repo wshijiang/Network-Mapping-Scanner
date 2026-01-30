@@ -1,6 +1,6 @@
 ﻿CC := gcc
 LDFLAGS := -lcurl -lpq
-CFLAGS := -Wall -O2 -MMD -MP
+CFLAGS := -Wall -O2 -MMD -MP -g
 
 TARGET := scanner
 
@@ -19,6 +19,12 @@ SRCS := \
 
 OBJS := $(SRCS:%.c=$(OBJ_DIR)/%.o)
 DEPS := $(OBJS:.o=.d)
+
+$(info DEBUG = $(DEBUG))
+
+ifeq ($(DEBUG), 1)
+  CFLAGS += -g
+endif
 
 all: $(TARGET)
 
