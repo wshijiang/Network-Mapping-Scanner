@@ -245,10 +245,6 @@ int main(int argc, char* argv[])
     }
     printf("\n\n通过所有检查\n\n");
 
-    toml_free(config_result);
-
-    
-    exit(1);
 
 	setbuf(stdout, NULL); // 禁用缓冲，确保输出立即显示
     if (!sign_signal_func()) return 0;                    //注册信号处理函数
