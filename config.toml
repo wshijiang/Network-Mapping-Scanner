@@ -1,4 +1,4 @@
-[scanner]
+﻿[scanner]
 c_server = "example.com"
 c_port = 80
 rate = 10000000

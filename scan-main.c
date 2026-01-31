@@ -342,6 +342,7 @@ int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* ma
     {
         ssize_t bytes_read = read(fd, buffer, sizeof(buffer) - 1);
         if (bytes_read <= 0) {
+            sleep(1); // 休眠一秒后重新读取
             continue; // 没有数据可读，继续
         }
 
@@ -357,8 +358,10 @@ int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* ma
                 // 处理完整的一行
                 if (!strncmp(line_buffer, "Banner", 6))
                 {
+                    // 将banner清空，避免脏数据污染
+                    memset(data->banner, 0, sizeof(data->banner));
                     unsigned int port;
-                    //char protocol[10], ipv4[16], service[128], banner[5120];
+                    //char protocol[10], ipv4[16], service[128], banner[7168];
                     if (sscanf(line_buffer, "Banner %u %9s %39s %127s %7167[^\n]", &data->port, data->protocol, data->ip, data->service, data->banner) == 5)
                     {
                         if (stop_signal) return 0;
