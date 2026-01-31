@@ -328,7 +328,19 @@ int main(int argc, char* argv[])
     return 0;
 }
 
+/**
+ * 移除字符串末尾的空白字符（包括空格、\r、\n、\t）
+ */
+void trim_trailing_spaces(char* str) {
+    if (str == NULL || *str == '\0') return;
 
+    size_t len = strlen(str);
+    // 从最后一个字符开始往前找
+    while (len > 0 && isspace((unsigned char)str[len - 1])) {
+        str[len - 1] = '\0'; // 将其置为字符串结束符
+        len--;
+    }
+}
 
 // 新增函数：直接从文件描述符读取而不是FILE*
 int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* manager, const char* scanner_name)
@@ -364,6 +376,8 @@ int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* ma
                     //char protocol[10], ipv4[16], service[128], banner[7168];
                     if (sscanf(line_buffer, "Banner %u %9s %39s %127s %7167[^\n]", &data->port, data->protocol, data->ip, data->service, data->banner) == 5)
                     {
+                        // 清除多余的空格
+                        trim_trailing_spaces(data->banner);
                         if (stop_signal) return 0;
 
                         if (check_write(manager)) {
