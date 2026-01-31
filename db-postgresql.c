@@ -212,10 +212,10 @@ PGconn* connect_to_postgresql(const DbConnectInfo* info, const unsigned retry_ti
 		PGconn* conn = PQconnectdb(conn_info);
 		if (PQstatus(conn) != CONNECTION_OK) //BUG
 		{
-			fprintf(stderr, "连接至数据库失败: %s", PQerrorMessage(conn));
+			fprintf(stderr, "连接至数据库失败: %s\n", PQerrorMessage(conn));
 			PQfinish(conn); /*结束连接*/
 			//需要日志
-			fprintf(stderr, "等待 %u 秒后重新连接数据库", sleep_time);
+			fprintf(stderr, "等待 %u 秒后重新连接数据库\n", sleep_time);
 			sleep(sleep_time);
 			sleep_time *= 2; //递增等待时间
 		}
