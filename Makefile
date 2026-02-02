@@ -1,6 +1,6 @@
 ﻿CC := gcc
 LDFLAGS := -lcurl -lpq
-CFLAGS := -Wall -O2 -MMD -MP -g
+CFLAGS := -Wall -O2 -MMD -MP
 
 TARGET := scanner
 
@@ -14,7 +14,8 @@ SRCS := \
 	scaninfo-cache.c \
 	db-postgresql.c \
 	cJSON.c \
-	time-and-json.c
+	time-and-json.c \
+	config.c
 
 
 OBJS := $(SRCS:%.c=$(OBJ_DIR)/%.o)
