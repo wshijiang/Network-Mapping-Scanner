@@ -5,7 +5,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
-#include <string.h>
+//#include <string.h>
 #include <postgresql/libpq-fe.h>
 #include <signal.h>
 #include <errno.h>
@@ -15,7 +15,8 @@
 #include "db-postgresql.h"
 #include "http_conn.h"
 #include "cJSON.h"
-#include "tomlc17.h"
+//#include "tomlc17.h"
+#include "config.h"
 
 //#include "uthash.h" //哈希表库
 int stop_signal = 0;
@@ -137,15 +138,15 @@ int main(int argc, char* argv[])
     //    printf("参数不足，只有%d\n", argc);
     //}
 
-    toml_result_t config_result = toml_parse_file_ex("config.toml");
-
-    //检查配置文件读取是否正常
-
-    if (!config_result.ok) {
-        fprintf(stderr, "配置文件错误\n");
-        fprintf(stderr, "%s\n", config_result.errmsg);
-        exit(1);
+    toml_result_t config_result = {0};
+    
+    if (loading_config(&config_result, "config.toml", 1) == -1) {
+        fprintf(stderr, "退出\n");
+        toml_free(config_result);
+        exit(0);
     }
+
+
 
     //从配置文件读取扫描器配置
     toml_datum_t server = toml_seek(config_result.toptab, "scanner.c_server");
@@ -244,6 +245,11 @@ int main(int argc, char* argv[])
         exit(1);
     }
     printf("\n\n通过所有检查\n\n");
+
+    // 测试重加载
+    toml_free(config_result);
+    printf("清理数据并退出\n");
+    exit(1);
 
 
 	setbuf(stdout, NULL); // 禁用缓冲，确保输出立即显示
