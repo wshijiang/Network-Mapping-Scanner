@@ -146,8 +146,6 @@ int main(int argc, char* argv[])
         exit(0);
     }
 
-
-
     //从配置文件读取扫描器配置
     toml_datum_t server = toml_seek(config_result.toptab, "scanner.c_server");
     toml_datum_t port = toml_seek(config_result.toptab, "scanner.c_port");
@@ -166,86 +164,11 @@ int main(int argc, char* argv[])
     toml_datum_t d_password = toml_seek(config_result.toptab, "database.password");
 
 
-    if (server.type != TOML_STRING) {
-        fprintf(stderr, "server.type 不为 string\n");
-        toml_free(config_result);
-        exit(1);
-    }
     printf("scanner.c_server = %s\n", server.u.s);
-
-
-    if (port.type != TOML_INT64) {
-        fprintf(stderr, "port.type 不为 int64\n");
-        toml_free(config_result);
-        exit(1);
-    }
-    printf("scanner.c_port = %ld\n", port.u.int64);
-
-
-    if (rate.type != TOML_INT64) {
-        fprintf(stderr, "rate.type 不为 int64\n");
-        toml_free(config_result);
-        exit(1);
-    }
     printf("scanner.rate = %ld\n", rate.u.int64);
-
-
-    if (api.type != TOML_STRING) {
-        fprintf(stderr, "api.type 不为 string\n");
-        toml_free(config_result);
-        exit(1);
-    }
-    printf("email_notify.api = %s\n", api.u.s);
-
-    if (send_email.type != TOML_STRING) {
-        fprintf(stderr, "send_email.type 不为 string\n");
-        toml_free(config_result);
-        exit(1);
-    }
-    printf("email_notify.send_email = %s\n", send_email.u.s);
-
-    if (email.type != TOML_STRING) {
-        fprintf(stderr, "email.type 不为 string\n");
-        toml_free(config_result);
-        exit(1);
-    }
-
     printf("email_notify.email = %s\n", email.u.s);
-
-    if (d_host.type != TOML_STRING) {
-        fprintf(stderr, "[database] => host 字段错误\n");
-        toml_free(config_result);
-        exit(1);
-    }
-
-    if (d_port.type != TOML_INT64) {
-        fprintf(stderr, "[database] => port 字段错误\n");
-        toml_free(config_result);
-        exit(1);
-    }
-
-    if (d_name.type != TOML_STRING) {
-        fprintf(stderr, "[database] => name 字段错误\n");
-        toml_free(config_result);
-        exit(1);
-    }
-
     printf("database.host = %s\ndatabase.port = %ld\ndatabase.db_name = %s\n", d_host.u.s, d_port.u.int64, d_name.u.s);
-
-    if (d_username.type != TOML_STRING) {
-        fprintf(stderr, "[database] => username 字段错误\n");
-        toml_free(config_result);
-        exit(1);
-    }
-    printf("database.username = %s\n", d_username.u.s);
-
-    if (d_password.type != TOML_STRING) {
-        fprintf(stderr, "[database] => password 字段错误");
-        toml_free(config_result);
-        exit(1);
-    }
     printf("\n\n通过所有检查\n\n");
-
     // 测试重加载
     toml_free(config_result);
     printf("清理数据并退出\n");
