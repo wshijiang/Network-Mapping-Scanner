@@ -44,7 +44,7 @@ int sign_signal_func()
     return 1;
 }
 
-int check_write(const CacheManager* manager)
+int check_write(const CacheManager *manager)
 {
     if (!manager) return 0;
     if (stop_signal == 1) return 1; //更改写入数据库逻辑，仅在收到停止信号或结束扫描时写入，没有写入条数限制
@@ -56,7 +56,7 @@ int check_write(const CacheManager* manager)
 /**
  * 发送目标或控制信号（纯文本行协议）
  */
-int send_target(int write_fd, const char* target) {
+int send_target(int write_fd, const char *target) {
     char buffer[256];
     snprintf(buffer, sizeof(buffer), "%s\n", target);
     size_t len = strlen(buffer);
@@ -70,7 +70,7 @@ int send_target(int write_fd, const char* target) {
 /**
  * 接收目标或控制信号（纯文本行协议）
  */
-char* receive_target(int read_fd) {
+char *receive_target(int read_fd) {
     static char buffer[256];
     static int buffer_pos = 0;
     static int buffer_len = 0;
@@ -80,7 +80,7 @@ char* receive_target(int read_fd) {
         if (buffer[i] == '\n') {
             // 找到完整的行
             int line_len = i - buffer_pos;
-            char* result = malloc(line_len + 1);
+            char *result = malloc(line_len + 1);
             if (!result) return NULL;
 
             memcpy(result, buffer + buffer_pos, line_len);
@@ -88,9 +88,8 @@ char* receive_target(int read_fd) {
 
             // 更新缓冲区位置
             buffer_pos = i + 1;
-            if (buffer_pos >= buffer_len) {
+            if (buffer_pos >= buffer_len)
                 buffer_pos = buffer_len = 0;
-            }
 
             return result;
         }
@@ -119,11 +118,11 @@ char* receive_target(int read_fd) {
 
 
 
-int main(int argc, char* argv[]) 
+int main(int argc, char *argv[])
 {
 
     printf("获取环境变量测试\n");
-    char* env;
+    char *env;
     env = getenv("scanner_debug");
     if (env == NULL) {
         printf("没有环境变量 scanner_debug\n");
@@ -138,8 +137,8 @@ int main(int argc, char* argv[])
     //    printf("参数不足，只有%d\n", argc);
     //}
 
-    toml_result_t config_result = {0};
-    
+    toml_result_t config_result = { 0 };
+
     if (loading_config(&config_result, "config.toml", 1) == -1) {
         fprintf(stderr, "退出\n");
         toml_free(config_result);
@@ -169,17 +168,13 @@ int main(int argc, char* argv[])
     printf("email_notify.email = %s\n", email.u.s);
     printf("database.host = %s\ndatabase.port = %ld\ndatabase.db_name = %s\n", d_host.u.s, d_port.u.int64, d_name.u.s);
     printf("\n\n通过所有检查\n\n");
-    // 测试重加载
-    toml_free(config_result);
-    printf("清理数据并退出\n");
-    exit(1);
 
 
-	setbuf(stdout, NULL); // 禁用缓冲，确保输出立即显示
+    setbuf(stdout, NULL); // 禁用缓冲，确保输出立即显示
     if (!sign_signal_func()) return 0;                    //注册信号处理函数
     printf("启动中\n");
 
-    CacheManager* manager = create_cache_manager();
+    CacheManager *manager = create_cache_manager();
     DbConnectInfo db_info;
     db_info.ip = d_host.u.s;                // 主机地址
     db_info.port = d_port.u.int64;          // 端口
@@ -187,30 +182,27 @@ int main(int argc, char* argv[])
     db_info.db_name = d_name.u.s;           // 数据库名称
     db_info.username = d_username.u.s;      // 用户名
     db_info.password = d_password.u.s;      // 密码
-    PGconn* conn = create_conn(&db_info);
-    if (!conn)
-    {
+    PGconn *conn = create_conn(&db_info);
+    if (!conn) {
         clear_cache_manager(manager);
         exit(1);
     }
     printf("开始初始数据库\n");
-    if (!postgresql_init(conn))
-    {
+    if (!postgresql_init(conn)) {
         clear_cache_manager(manager);
         PQfinish(conn);
         exit(1);
     }
 
-    ScanData* data = malloc(sizeof(ScanData));
-    if (!data)
-    {
-		fprintf(stderr, "Masscan data内存分配失败\n");
+    ScanData *data = malloc(sizeof(ScanData));
+    if (!data) {
+        fprintf(stderr, "Masscan data内存分配失败\n");
         clear_cache_manager(manager);
         PQfinish(conn);
         exit(1);
-    } 
+    }
     printf("分配scan data成功\n");
-	//ScanConfig* scan_config = malloc(sizeof(ScanConfig));
+    //ScanConfig* scan_config = malloc(sizeof(ScanConfig));
 
  //   if (!scan_config)
  //   {
@@ -236,13 +228,12 @@ int main(int argc, char* argv[])
     //    clear_cache_manager(manager);
     //    exit(1);
     //}
-    
-    if (!stop_signal)
-    {
+
+    if (!stop_signal) {
         scan(conn, data, manager);
         printf("扫描完成\n");
     }
-    
+
 
     /**
     * 清理分配的内存
@@ -260,7 +251,7 @@ int main(int argc, char* argv[])
 /**
  * 移除字符串末尾的空白字符（包括空格、\r、\n、\t）
  */
-void trim_trailing_spaces(char* str) {
+void trim_trailing_spaces(char *str) {
     if (str == NULL || *str == '\0') return;
 
     size_t len = strlen(str);
@@ -272,15 +263,14 @@ void trim_trailing_spaces(char* str) {
 }
 
 // 新增函数：直接从文件描述符读取而不是FILE*
-int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* manager, const char* scanner_name)
+int scan_output_format_fd(PGconn *conn, int fd, ScanData *data, CacheManager *manager, const char *scanner_name)
 {
     char buffer[8192];
     char line_buffer[8192];
     int line_pos = 0;
     sleep(1); //暂停2秒
 
-    while (!stop_signal)
-    {
+    while (!stop_signal) {
         ssize_t bytes_read = read(fd, buffer, sizeof(buffer) - 1);
         if (bytes_read <= 0) {
             sleep(1); // 休眠一秒后重新读取
@@ -288,23 +278,19 @@ int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* ma
         }
 
         buffer[bytes_read] = '\0';
-        
+
         // 处理接收到的数据，按行分割
-        for (int i = 0; i < bytes_read; i++)
-        {
-            if (buffer[i] == '\n')
-            {
+        for (int i = 0; i < bytes_read; i++) {
+            if (buffer[i] == '\n') {
                 line_buffer[line_pos] = '\0';
 
                 // 处理完整的一行
-                if (!strncmp(line_buffer, "Banner", 6))
-                {
+                if (!strncmp(line_buffer, "Banner", 6)) {
                     // 将banner清空，避免脏数据污染
                     memset(data->banner, 0, sizeof(data->banner));
                     unsigned int port;
                     //char protocol[10], ipv4[16], service[128], banner[7168];
-                    if (sscanf(line_buffer, "Banner %u %9s %39s %127s %7167[^\n]", &data->port, data->protocol, data->ip, data->service, data->banner) == 5)
-                    {
+                    if (sscanf(line_buffer, "Banner %u %9s %39s %127s %7167[^\n]", &data->port, data->protocol, data->ip, data->service, data->banner) == 5) {
                         // 清除多余的空格
                         trim_trailing_spaces(data->banner);
                         if (stop_signal) return 0;
@@ -312,25 +298,21 @@ int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* ma
                         if (check_write(manager)) {
                             if (!write_to_database(conn, manager)) return 0;
                         }
-                        else {
-                            if (!add_scan_result_to_cache(manager, data->ip, scanner_name, data->port, data->service, data->protocol, data->banner)) return 0;
-                        }
+                        else if (!add_scan_result_to_cache(manager, data->ip, scanner_name, data->port, data->service, data->protocol, data->banner))
+                            return 0
                     }
                 }
-                else if (!strncmp(line_buffer, "COMPLETE", 8))
-                {
+                else if (!strncmp(line_buffer, "COMPLETE", 8)) {
                     if (!write_to_database(conn, manager)) return 0;
                     scan_done = 1;
                     return 1;
                 }
-                else if (!strncmp(line_buffer, "ERROR", 5))
-                {
+                else if (!strncmp(line_buffer, "ERROR", 5)) {
                     printf("收到 ERROR\n");
                     stop_signal = 1;
                     return 0;
                 }
-                else if (!strncmp(line_buffer, "DONE_OK", 7))
-                {
+                else if (!strncmp(line_buffer, "DONE_OK", 7)) {
                     printf("收到DONE_OK\n");
                     stop_signal = 1;
                     return 1;
@@ -338,11 +320,9 @@ int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* ma
 
                 line_pos = 0;
             }
-            else {
-                if (line_pos < sizeof(line_buffer) - 1) {
-                    line_buffer[line_pos++] = buffer[i];
-                }
-            }
+            else if (line_pos < sizeof(line_buffer) - 1)
+                line_buffer[line_pos++] = buffer[i];
+
         } //for
     } //while
 
@@ -352,7 +332,7 @@ int scan_output_format_fd(PGconn* conn, int fd, ScanData* data, CacheManager* ma
 /*
 先创建一个子线程，然后在子线程中执行扫描
 */
-int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
+int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
 {
     pid_t pid;
     int parent_to_child[2];
@@ -383,7 +363,7 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
         sleep(1); //等待1秒
         int wait_n = 0;  //重试期间等待次数，避免大量无用输出
         while (!stop_signal) {
-            char* target = receive_target(parent_to_child[0]);
+            char *target = receive_target(parent_to_child[0]);
             if (!target) {
                 wait_n += 1;
                 fprintf(stderr, "Failed to receive target: %s\n", strerror(errno));
@@ -400,7 +380,6 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
 
 
             if (!strcmp(target, "DONE")) {
-
                 free(target);
                 printf("DONE_OK\n");
                 fflush(stdout);
@@ -455,7 +434,7 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
                 continue;
             }
 
-            char* scan_argv[] = {
+            char *scan_argv[] = {
                 "a",
                 "-p0-65535",
                 target,
@@ -484,17 +463,15 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
                 printf("ERROR\n");
                 fflush(stdout);
             }
-            
-            else {
-                if (WIFEXITED(status)) {
-                    printf("COMPLETE\n");
-                    fflush(stdout);
-                }
-                else {
-                    printf("ERROR\n");
-                    fflush(stdout);
-                }
+            else if (WIFEXITED(status)) {
+                printf("COMPLETE\n");
+                fflush(stdout);
             }
+            else {
+                printf("ERROR\n");
+                fflush(stdout);
+            }
+
             free(target);
         }
 
@@ -507,7 +484,7 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
         close(child_to_parent[1]);
 
         int req_count = 0;
-        const char* target_domain = "http://192.168.1.6:9999/scanner/target";
+        const char *target_domain = "http://192.168.1.6:9999/scanner/target";
         int child_exited = 0;
 
         while (!stop_signal && !child_exited) {
@@ -527,16 +504,14 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
 
             // 获取目标
 
-            if (!scan_done)
-
-            {
+            if (!scan_done) {
                 sleep(1);
                 continue;
             }
 
             scan_done = 0;
 
-            char* http_result = http_requests(target_domain);
+            char *http_result = http_requests(target_domain);
             if (!http_result) {
                 sleep(5);
                 req_count++;
@@ -548,7 +523,7 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
                 continue;
             }
 
-            cJSON* root = cJSON_Parse(http_result);
+            cJSON *root = cJSON_Parse(http_result);
 
             if (!root) {
                 fprintf(stderr, "JSON parse failed\n");
@@ -563,7 +538,7 @@ int scan(PGconn* conn, ScanData* ScanData, CacheManager* manager)
             }
 
             //从json中获取ip参数
-            cJSON* ip = cJSON_GetObjectItemCaseSensitive(root, "ip");
+            cJSON *ip = cJSON_GetObjectItemCaseSensitive(root, "ip");
             if (cJSON_IsString(ip) && ip->valuestring != NULL) {
                 if (!send_target(parent_to_child[1], ip->valuestring)) {
                     fprintf(stderr, "Failed to send target: %s\n", ip->valuestring);
