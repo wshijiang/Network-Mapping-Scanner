@@ -5,22 +5,52 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
-//#include <string.h>
 #include <postgresql/libpq-fe.h>
 #include <signal.h>
 #include <errno.h>
 #include <spawn.h>
+#include <ctype.h>
 
 #include "masscan_main.h"
 #include "db-postgresql.h"
 #include "http_conn.h"
 #include "cJSON.h"
-//#include "tomlc17.h"
 #include "config.h"
+#include "health_check.h"
+#include "cargs.h"
 
-//#include "uthash.h" //哈希表库
 int stop_signal = 0;
 int scan_done = 1;
+
+/**
+* 定义命令行参数所需要的
+*/
+static struct cag_option options[] = {
+    /* 健康检查 */
+    {
+        .identifier = 'c',
+        .access_letters = NULL,
+        .access_name = "health-check",
+        .value_name = NULL,
+        .description = "启用健康检查，使用该选项不会发动扫描"
+    },
+    /* 帮助 */
+    {
+        .identifier = 'h',
+        .access_letters = "h",
+        .access_name = "help",
+        .value_name = NULL,
+        .description = "帮助"
+    },
+    /* debug */
+    {
+        .identifier = 'd',
+        .access_letters = NULL,
+        .access_name = "debug",
+        .value_name = NULL,
+        .description = "启用 DEBUG 模式"
+    }
+};
 
 void signal_handler(int signum)
 {
@@ -120,22 +150,43 @@ char *receive_target(int read_fd) {
 
 int main(int argc, char *argv[])
 {
+    int health_mode = 0;                   /* 用于控制健康检查模式，避免发生真实的扫描 */
+    int debug_mode = 0;                    /* 用于控制 debug 模式 */
 
-    printf("获取环境变量测试\n");
-    char *env;
-    env = getenv("scanner_debug");
-    if (env == NULL) {
-        printf("没有环境变量 scanner_debug\n");
+
+    cag_option_context cag_context_s;
+    cag_option_init(&cag_context_s, options, CAG_ARRAY_SIZE(options), argc, argv);
+    while (cag_option_fetch(&cag_context_s)) {
+        switch (cag_option_get_identifier(&cag_context_s)) {
+        case 'c':
+            health_mode = 1;
+            printf("开启健康检查模式\n\n");
+            break;
+        case 'h':
+            printf("使用帮助:\n");
+            cag_option_print(options, CAG_ARRAY_SIZE(options), stdout);
+            return 0;
+        case 'd':
+            debug_mode = 1;
+            printf("开启 DEBUG\n");
+            break;
+        default:
+            printf("使用帮助：\n");
+            cag_option_print(options, CAG_ARRAY_SIZE(options), stdout);
+            printf("\n\n");
+            cag_option_print_error(&cag_context_s, stdout);
+            return 0;
+        }
     }
 
-    if (env) {
-        printf("DEBUG 开启\n");
+    if (health_mode) {
+        printf("HEALTH CHECKING\n");
+        
+        if (!get_target_test("http://127.0.0.1:9999/scanner/target")) {
+            fprintf(stderr, "获取目标测试错误\n");
+        }
     }
-    printf("scanner_debug = %s\n", env);
-    //if (argc != 6)
-    //{
-    //    printf("参数不足，只有%d\n", argc);
-    //}
+    
 
     toml_result_t config_result = { 0 };
 
@@ -167,7 +218,7 @@ int main(int argc, char *argv[])
     printf("scanner.rate = %ld\n", rate.u.int64);
     printf("email_notify.email = %s\n", email.u.s);
     printf("database.host = %s\ndatabase.port = %ld\ndatabase.db_name = %s\n", d_host.u.s, d_port.u.int64, d_name.u.s);
-    printf("\n\n通过所有检查\n\n");
+    printf("\n\n配置文件通过所有检查\n\n");
 
 
     setbuf(stdout, NULL); // 禁用缓冲，确保输出立即显示
@@ -229,7 +280,7 @@ int main(int argc, char *argv[])
     //    exit(1);
     //}
 
-    if (!stop_signal) {
+    if (!stop_signal && !health_mode) {
         scan(conn, data, manager);
         printf("扫描完成\n");
     }
@@ -299,7 +350,7 @@ int scan_output_format_fd(PGconn *conn, int fd, ScanData *data, CacheManager *ma
                             if (!write_to_database(conn, manager)) return 0;
                         }
                         else if (!add_scan_result_to_cache(manager, data->ip, scanner_name, data->port, data->service, data->protocol, data->banner))
-                            return 0
+                            return 0;
                     }
                 }
                 else if (!strncmp(line_buffer, "COMPLETE", 8)) {
@@ -359,7 +410,7 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
         //dup2(child_to_parent[1], STDERR_FILENO);
         close(child_to_parent[1]);
         setbuf(stdout, NULL);
-        static unsigned int scan_seed = 1;
+
         sleep(1); //等待1秒
         int wait_n = 0;  //重试期间等待次数，避免大量无用输出
         while (!stop_signal) {

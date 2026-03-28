@@ -15,7 +15,9 @@ SRCS := \
 	db-postgresql.c \
 	cJSON.c \
 	time-and-json.c \
-	config.c
+	config.c \
+	health_check.c \
+	cargs.c
 
 
 OBJS := $(SRCS:%.c=$(OBJ_DIR)/%.o)
