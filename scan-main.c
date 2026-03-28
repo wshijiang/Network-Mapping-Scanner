@@ -17,6 +17,7 @@
 #include "cJSON.h"
 //#include "tomlc17.h"
 #include "config.h"
+#include "health_check.h"
 
 //#include "uthash.h" //哈希表库
 int stop_signal = 0;
@@ -120,22 +121,29 @@ char *receive_target(int read_fd) {
 
 int main(int argc, char *argv[])
 {
-
+    int health_model = 0;                   // 用于控制健康检查模式，避免发生真实的扫描
     printf("获取环境变量测试\n");
-    char *env;
+    char *env = NULL;
+    char *health_m = NULL;
     env = getenv("scanner_debug");
-    if (env == NULL) {
-        printf("没有环境变量 scanner_debug\n");
-    }
 
     if (env) {
         printf("DEBUG 开启\n");
+        printf("scanner_debug = %s\n", env);
     }
-    printf("scanner_debug = %s\n", env);
-    //if (argc != 6)
-    //{
-    //    printf("参数不足，只有%d\n", argc);
-    //}
+
+    health_m = getenv("health");
+
+    if (health_m) {
+        printf("HEALTH CHECKING\n");
+        printf("health = %s\n", health_m);
+        health_model = 1;
+        
+        if (!get_target_test("http://127.0.0.1:9999/scanner/target")) {
+            fprintf(stderr, "获取目标测试错误\n");
+        }
+    }
+    
 
     toml_result_t config_result = { 0 };
 
@@ -167,7 +175,7 @@ int main(int argc, char *argv[])
     printf("scanner.rate = %ld\n", rate.u.int64);
     printf("email_notify.email = %s\n", email.u.s);
     printf("database.host = %s\ndatabase.port = %ld\ndatabase.db_name = %s\n", d_host.u.s, d_port.u.int64, d_name.u.s);
-    printf("\n\n通过所有检查\n\n");
+    printf("\n\n配置文件通过所有检查\n\n");
 
 
     setbuf(stdout, NULL); // 禁用缓冲，确保输出立即显示
@@ -229,7 +237,7 @@ int main(int argc, char *argv[])
     //    exit(1);
     //}
 
-    if (!stop_signal) {
+    if (!stop_signal && !health_model) {
         scan(conn, data, manager);
         printf("扫描完成\n");
     }
@@ -299,7 +307,7 @@ int scan_output_format_fd(PGconn *conn, int fd, ScanData *data, CacheManager *ma
                             if (!write_to_database(conn, manager)) return 0;
                         }
                         else if (!add_scan_result_to_cache(manager, data->ip, scanner_name, data->port, data->service, data->protocol, data->banner))
-                            return 0
+                            return 0;
                     }
                 }
                 else if (!strncmp(line_buffer, "COMPLETE", 8)) {
