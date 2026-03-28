@@ -26,6 +26,7 @@ int scan_done = 1;
 * 定义命令行参数所需要的
 */
 static struct cag_option options[] = {
+    /* 健康检查 */
     {
         .identifier = 'c',
         .access_letters = NULL,
@@ -33,6 +34,7 @@ static struct cag_option options[] = {
         .value_name = NULL,
         .description = "启用健康检查，使用该选项不会发动扫描"
     },
+    /* 帮助 */
     {
         .identifier = 'h',
         .access_letters = "h",
@@ -40,6 +42,7 @@ static struct cag_option options[] = {
         .value_name = NULL,
         .description = "帮助"
     },
+    /* debug */
     {
         .identifier = 'd',
         .access_letters = NULL,
