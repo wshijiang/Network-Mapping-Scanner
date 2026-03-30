@@ -1,4 +1,4 @@
-﻿#include <string.h>
+#include <string.h>
 #include "tomlc17.h"
 
 struct config_field_t
@@ -8,4 +8,4 @@ struct config_field_t
 };
 
 
-int loading_config(toml_result_t *config_result, const char* filename, int hot_reloading);
+int loading_config(toml_result_t *config_result, const char *filename, int hot_reloading);
