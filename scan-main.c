@@ -11,13 +11,14 @@
 #include <spawn.h>
 #include <ctype.h>
 
+#include "cJSON.h"
+#include "cargs.h"
+#include "tomlc17.h"
 #include "masscan_main.h"
 #include "db-postgresql.h"
 #include "http_conn.h"
-#include "cJSON.h"
 #include "config.h"
 #include "health_check.h"
-#include "cargs.h"
 
 int stop_signal = 0;
 int scan_done = 1;
@@ -86,12 +87,13 @@ int check_write(const CacheManager *manager)
 /**
  * 发送目标或控制信号（纯文本行协议）
  */
-int send_target(int write_fd, const char *target) {
-    char buffer[256];
+int send_target(int write_fd, const char *target)
+{
+    char buffer[1024];
     snprintf(buffer, sizeof(buffer), "%s\n", target);
     size_t len = strlen(buffer);
     if (write(write_fd, buffer, len) != (ssize_t)len) {
-        perror("Failed to send target");
+        perror("\033[31mFailed to send target\033[0m\n");
         return 0;
     }
     return 1;
@@ -99,8 +101,10 @@ int send_target(int write_fd, const char *target) {
 
 /**
  * 接收目标或控制信号（纯文本行协议）
+ * 该函数接收一个文件描述符。正常时返回一个指向分配内存的指针，需要调用者主动释放分配的内存。当出现错误时，返回 NULL
  */
-char *receive_target(int read_fd) {
+char *receive_target(int read_fd)
+{
     static char buffer[256];
     static int buffer_pos = 0;
     static int buffer_len = 0;
@@ -145,7 +149,6 @@ char *receive_target(int read_fd) {
     // 递归调用查找行
     return receive_target(read_fd);
 }
-
 
 
 int main(int argc, char *argv[])
@@ -245,7 +248,7 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    ScanData *data = malloc(sizeof(ScanData));
+    struct ScanData *data = malloc(sizeof(struct ScanData));
     if (!data) {
         fprintf(stderr, "Masscan data内存分配失败\n");
         clear_cache_manager(manager);
@@ -302,7 +305,8 @@ int main(int argc, char *argv[])
 /**
  * 移除字符串末尾的空白字符（包括空格、\r、\n、\t）
  */
-void trim_trailing_spaces(char *str) {
+void trim_trailing_spaces(char *str) 
+{
     if (str == NULL || *str == '\0') return;
 
     size_t len = strlen(str);
@@ -314,7 +318,7 @@ void trim_trailing_spaces(char *str) {
 }
 
 // 新增函数：直接从文件描述符读取而不是FILE*
-int scan_output_format_fd(PGconn *conn, int fd, ScanData *data, CacheManager *manager, const char *scanner_name)
+int scan_output_format_fd(PGconn *conn, int fd, struct ScanData *data, CacheManager *manager, const char *scanner_name)
 {
     char buffer[8192];
     char line_buffer[8192];
@@ -383,7 +387,7 @@ int scan_output_format_fd(PGconn *conn, int fd, ScanData *data, CacheManager *ma
 /*
 先创建一个子线程，然后在子线程中执行扫描
 */
-int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
+int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
 {
     pid_t pid;
     int parent_to_child[2];
@@ -391,13 +395,13 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
 
     // 创建管道
     if (pipe(parent_to_child) == -1 || pipe(child_to_parent) == -1) {
-        perror("创建管道失败");
+        perror("\033[31m创建管道失败\n\033[0m");
         return 0;
     }
 
     pid = fork();
     if (pid == -1) {
-        perror("创建子进程失败");
+        perror("\033[31m创建子进程失败\n\033[0m");
         return 0;
     }
 
@@ -407,40 +411,66 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
 
         // 重定向标准输出和错误输出
         dup2(child_to_parent[1], STDOUT_FILENO);
-        //dup2(child_to_parent[1], STDERR_FILENO);
-        close(child_to_parent[1]);
-        setbuf(stdout, NULL);
 
-        sleep(1); //等待1秒
+        close(child_to_parent[1]);
+        //setbuf(stdout, NULL);
+
         int wait_n = 0;  //重试期间等待次数，避免大量无用输出
         while (!stop_signal) {
+
+            cJSON *root = NULL;
+            cJSON *target_ip = NULL;
+            cJSON *target_port = NULL;
+            cJSON *source_port = NULL;
+            cJSON *rate = NULL;
+
             char *target = receive_target(parent_to_child[0]);
+            fprintf(stderr, "target: %s\n", target);
+
+            fprintf(stderr, "接收目标\n");
+
             if (!target) {
+                fprintf(stderr, "收到的目标为 NULL\n");
+                printf("ERROR\n");
+                printf("DONE_OK\n");
+                
+                break;
+            }
+
+            if (!strcmp(target, "DONE")) {
+                printf("DONE_OK\n");
+                free(target);
+                break;  // 跳出循环但不退出进程
+            }
+
+            root = cJSON_Parse(target);
+
+            if (!check_target(root, &target_ip, &target_port, &source_port, &rate, 0)) {
+                printf("ERROR\n");
+
+                free(target);
+                cJSON_Delete(root);
+                continue;
+            }
+            
+
+            /*char *target = receive_target(parent_to_child[0]);*/
+            if (!root || !target_ip || !target_port || !source_port || !rate) {
                 wait_n += 1;
-                fprintf(stderr, "Failed to receive target: %s\n", strerror(errno));
+                fprintf(stderr, "\033[31mFailed to receive target: %s\n\033[0m", strerror(errno));
                 if (wait_n < 10) {
-                    sleep(wait_n * 2);
+                    sleep(wait_n * 4);
                 }
                 else {
                     //当重试10次以上后直接退出
                     send_stop_email(); //发送停止提示邮件
                     stop_signal = 1;
                 }
+                free(target);
+                cJSON_Delete(root);
                 continue;
             }
 
-
-            if (!strcmp(target, "DONE")) {
-                free(target);
-                printf("DONE_OK\n");
-                fflush(stdout);
-                break;  // 跳出循环但不退出进程
-            }
-
-            //删除了masscan种子
-
-            //char seed_str[16];
-            //snprintf(seed_str, sizeof(seed_str), "%u", scan_seed++);
 
             // 执行扫描
             pid_t child_pid;
@@ -451,8 +481,9 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
             if (posix_spawn_file_actions_init(&actions) != 0) {
                 fprintf(stderr, "posix_spawn_file_actions_init错误\n");
                 printf("ERROR\n");
-                fflush(stdout);
+                
                 free(target);
+                cJSON_Delete(root);
                 continue;
             }
 
@@ -460,8 +491,9 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
                 posix_spawn_file_actions_destroy(&actions);
                 printf("ERROR\n");
                 fprintf(stderr, "posix_spawnattr_init错误\n");
-                fflush(stdout);
+                
                 free(target);
+                cJSON_Delete(root);
                 continue;
             }
 
@@ -470,8 +502,9 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
                 posix_spawnattr_destroy(&attr);
                 printf("ERROR\n");
                 fprintf(stderr, "posix_spawnattr_setflags错误\n");
-                fflush(stdout);
+                
                 free(target);
+                cJSON_Delete(root);
                 continue;
             }
 
@@ -480,19 +513,19 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
                 posix_spawnattr_destroy(&attr);
                 printf("ERROR\n");
                 fprintf(stderr, "posix_spawn_file_actions_adddup2错误\n");
-                fflush(stdout);
+                
                 free(target);
+                cJSON_Delete(root);
                 continue;
             }
 
             char *scan_argv[] = {
                 "a",
-                "-p0-65535",
-                target,
-                "--rate=40000",
+                target_ip->valuestring,
+                "-p", target_port->valuestring,
+                "--rate", rate->valueint,
                 "--banner",
-                "--source-port",
-                "61000",
+                "--source-port", source_port->valueint,
                 NULL
             };
 
@@ -504,26 +537,25 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
             if (status != 0) {
                 fprintf(stderr, "posix_spawnp failed: %s\n", strerror(status));
                 printf("ERROR\n");
-                fflush(stdout);
+                
                 free(target);
+                cJSON_Delete(root);
                 continue;
             }
 
             // 等待子子进程完成
             if (waitpid(child_pid, &status, 0) == -1) {
                 printf("ERROR\n");
-                fflush(stdout);
             }
             else if (WIFEXITED(status)) {
                 printf("COMPLETE\n");
-                fflush(stdout);
             }
             else {
                 printf("ERROR\n");
-                fflush(stdout);
             }
 
             free(target);
+            cJSON_Delete(root);
         }
 
         close(parent_to_child[0]);
@@ -535,7 +567,7 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
         close(child_to_parent[1]);
 
         int req_count = 0;
-        const char *target_domain = "http://192.168.1.6:9999/scanner/target";
+        const char *target_domain = "http://127.0.0.1:9999/scanner/target";
         int child_exited = 0;
 
         while (!stop_signal && !child_exited) {
@@ -574,42 +606,14 @@ int scan(PGconn *conn, ScanData *ScanData, CacheManager *manager)
                 continue;
             }
 
-            cJSON *root = cJSON_Parse(http_result);
 
-            if (!root) {
-                fprintf(stderr, "JSON parse failed\n");
+            if (!send_target(parent_to_child[1], http_result)) {
+                fprintf(stderr, "Failed to send target: %s\n", http_result);
                 free(http_result);
-                req_count++;
-                scan_done = 1;
-                if (req_count >= 5) {
-                    send_target(parent_to_child[1], "DONE");
-                    break;
-                }
-                continue;
+                break;
             }
 
-            //从json中获取ip参数
-            cJSON *ip = cJSON_GetObjectItemCaseSensitive(root, "ip");
-            if (cJSON_IsString(ip) && ip->valuestring != NULL) {
-                if (!send_target(parent_to_child[1], ip->valuestring)) {
-                    fprintf(stderr, "Failed to send target: %s\n", ip->valuestring);
-                    cJSON_Delete(root);
-                    free(http_result);
-                    break;
-                }
-                req_count = 0;
-            }
-            else {
-                fprintf(stderr, "Invalid IP in JSON\n");
-                req_count++;
-                scan_done = 1;
-                if (req_count >= 5) {
-                    send_target(parent_to_child[1], "DONE");
-                    break;
-                }
-            }
-
-            cJSON_Delete(root);
+            
             free(http_result);
 
             // 处理扫描输出 - 修改为直接从文件描述符读取

@@ -15,19 +15,20 @@ int get_target_test(const char *test_url)
 	cJSON *target_ip = NULL;
 	cJSON *target_port = NULL;
 	cJSON *scanner_rate = NULL;
+	cJSON *source_port = NULL;
 
 
 	char *result = http_requests(test_url);
 	if (!result) {
-		free(result);
 		return 0;
 	}
 	root = cJSON_Parse(result);
-	
-	if (check_target(root, &target_ip, &target_port, &scanner_rate, 1)) {
-		printf("Received: %s:%s\tRATE:%d\n", target_ip->valuestring, target_port->valuestring, scanner_rate->valueint);
+
+	if (check_target(root, &target_ip, &target_port, &source_port, &scanner_rate, 1)) {
+		printf("Received: %s:%s\tRATE:%d\tSOURCE-PORT:%d\n", target_ip->valuestring, target_port->valuestring, scanner_rate->valueint, source_port->valueint);
 		printf("\033[32m获取目标正常\n\033[0m");
-	} else {
+	}
+	else {
 		fprintf(stderr, "\033[31m目标检查错误\n\033[0m");
 	}
 
@@ -42,7 +43,7 @@ int get_target_test(const char *test_url)
 * 返回 int 类型，0 代表发生了错误，1 为一切正确，并且会把获取到的数据写入传入指针所指向的内存中
 * 接收 2 个参数，分别为：json 根和模式（当 mode 为 0 时代表扫描中的检查，为 1 时代表处于健康检查模式）
 */
-int check_target(const cJSON *root, const cJSON **ip, const cJSON **port, const cJSON **rate,const int mode)
+int check_target(const cJSON *root, const cJSON **ip, const cJSON **port, const cJSON **source_port, const cJSON **rate, const int mode)
 {
 	if (mode) printf("开始检查目标\n");
 	if (root == NULL) {
@@ -56,6 +57,7 @@ int check_target(const cJSON *root, const cJSON **ip, const cJSON **port, const 
 	*ip = cJSON_GetObjectItemCaseSensitive(root, "ip");
 	*port = cJSON_GetObjectItemCaseSensitive(root, "port");
 	*rate = cJSON_GetObjectItemCaseSensitive(root, "rate");
+	*source_port = cJSON_GetObjectItemCaseSensitive(root, "source-port");
 
 	if (!cJSON_IsString(*ip) || ((*ip)->valuestring == NULL)) {
 		fprintf(stderr, "\033[31mIP 字段出现错误\n\033[0m");
@@ -75,7 +77,18 @@ int check_target(const cJSON *root, const cJSON **ip, const cJSON **port, const 
 		return 0;
 	}
 	else if ((*rate)->valueint <= 0 || (*rate)->valueint > 1000000) {
-		fprintf(stderr, "\033[31mRATE 字段数值异常：\n\tRATE=%d （0 < RATE <= 1000000）\033[0m", (*rate)->valueint);
+		fprintf(stderr, "\033[31mRATE 字段数值异常：\n\tRATE=%d （0 < RATE <= 1000000）\n\033[0m", (*rate)->valueint);
+
+		return 0;
+	}
+
+	if (!cJSON_IsNumber(*source_port)) {
+		fprintf(stderr, "\033[31mSOURCE-PORT 字段出现异常\n\033[0m");
+
+		return 0;
+	}
+	else if ((*source_port)->valueint <= 0 || (*source_port)->valueint > 65535) {
+		fprintf(stderr, "\033[31mSOURCE-PORT 字段数值异常：\n\tSOURCE-PORT=%d （0 < SOURCE-PORT <= 65535）\n\033[0m", (*source_port)->valueint);
 
 		return 0;
 	}
