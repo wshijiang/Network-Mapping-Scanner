@@ -519,13 +519,23 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
                 continue;
             }
 
+            /*
+            * 解决传递参数错误问题，将 int 转换为 char *
+            */
+
+            char rate_str[16];
+            char port_str[16];
+
+            snprintf(rate_str, sizeof(rate_str), "%d", rate->valueint);
+            snprintf(port_str, sizeof(port_str), "%d", source_port->valueint);
+
             char *scan_argv[] = {
                 "a",
                 target_ip->valuestring,
                 "-p", target_port->valuestring,
-                "--rate", rate->valueint,
+                "--rate", rate_str,
                 "--banner",
-                "--source-port", source_port->valueint,
+                "--source-port", port_str,
                 NULL
             };
 
