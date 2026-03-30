@@ -19,7 +19,7 @@ int get_target_test(const char *test_url)
 
 
 	char *result = http_requests(test_url);
-	if (!result) {
+	if (result == NULL) {
 		return 0;
 	}
 	root = cJSON_Parse(result);
