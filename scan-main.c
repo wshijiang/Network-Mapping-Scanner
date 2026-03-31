@@ -323,7 +323,6 @@ int scan_output_format_fd(PGconn *conn, int fd, struct ScanData *data, CacheMana
     char buffer[8192];
     char line_buffer[8192];
     int line_pos = 0;
-    sleep(1); //暂停2秒
 
     while (!stop_signal) {
         ssize_t bytes_read = read(fd, buffer, sizeof(buffer) - 1);
@@ -363,12 +362,12 @@ int scan_output_format_fd(PGconn *conn, int fd, struct ScanData *data, CacheMana
                     return 1;
                 }
                 else if (!strncmp(line_buffer, "ERROR", 5)) {
-                    printf("收到 ERROR\n");
+                    printf("收到子进程信号：\033[31mERROR\033[0m\n");
                     stop_signal = 1;
                     return 0;
                 }
                 else if (!strncmp(line_buffer, "DONE_OK", 7)) {
-                    printf("收到DONE_OK\n");
+                    printf("收到子进程信号：\033[32mDONE_OK\033[0m\n");
                     stop_signal = 1;
                     return 1;
                 }
@@ -425,17 +424,21 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             cJSON *rate = NULL;
 
             char *target = receive_target(parent_to_child[0]);
-            fprintf(stderr, "target: %s\n", target);
 
-            fprintf(stderr, "接收目标\n");
-
-            if (!target) {
+            if (target == NULL) {
                 fprintf(stderr, "收到的目标为 NULL\n");
                 printf("ERROR\n");
                 printf("DONE_OK\n");
                 
-                break;
+                if (wait_n <= 10) {
+                    sleep(1);
+                    wait_n++;
+
+                    continue;
+                }
+                else break;
             }
+            wait_n = 0;
 
             if (!strcmp(target, "DONE")) {
                 printf("DONE_OK\n");
@@ -447,7 +450,6 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
 
             if (!check_target(root, &target_ip, &target_port, &source_port, &rate, 0)) {
                 printf("ERROR\n");
-
                 free(target);
                 cJSON_Delete(root);
                 continue;
@@ -463,7 +465,6 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
                 }
                 else {
                     //当重试10次以上后直接退出
-                    send_stop_email(); //发送停止提示邮件
                     stop_signal = 1;
                 }
                 free(target);
