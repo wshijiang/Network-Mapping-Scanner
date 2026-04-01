@@ -13,6 +13,8 @@ int write_log_to_file(const FILE *fp, const char *message)
 
 	if (fputs(message, fp) == EOF) return 0;
 
+	if (fputs("\n", fp) == EOF) return 0;
+
 	return 1;
 }
 
@@ -58,7 +60,7 @@ int new_log_file(const time_t *now, const int roalling, const char *message)
 * 该函数用于写入日志，可以选择是否写入文件，默认输出为标准错误
 * 返回一个 指针，当一切正常时返回 NULL，出现错误时返回一个指针，调用者需要使用 free 释放掉指针指向的内存
 */
-char *log_to(const char *level, const char *event, const char *message, const char *event_path, const enum LOV_TYPE type)
+char *log_to(const char *level, const char *event, const char *message, const char *event_path, enum LOGTYPE type)
 {
 	cJSON *log_item = NULL, *i_timestamp = NULL, *i_level = NULL, *i_path = NULL;
 	cJSON *i_fields = NULL, *i_event = NULL, *i_message = NULL;
@@ -69,8 +71,7 @@ char *log_to(const char *level, const char *event, const char *message, const ch
 
 	if (log_item == NULL || i_fields == NULL) {
 		cJSON_Delete(log_item);
-		size_t buffer_s = 1;
-		char *r_e_message = (char *)malloc();
+		return "[ERROR]-[log.c->log_to->cJSON_CreateObject]-[cJSON_CreateObject-ERROR]-\"cJSON_CreateObject 出现了错误\"\n";
 	}
 
 	time_t now = time(NULL);
@@ -117,7 +118,7 @@ char *log_to(const char *level, const char *event, const char *message, const ch
 
 	switch (type) {
 	case LOG_TYPE_FILE:
-		if (!new_log_file(now, 1, log_message)) {
+		if (!new_log_file(&now, 1, log_message)) {
 			return "[ERROR]-[log.c->log_to->new_log_file]-[new_log_file-ERROR]-\"new_log_file 出现了错误\"\n";
 		}
 		

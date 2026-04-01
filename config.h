@@ -34,4 +34,4 @@ int loading_config(toml_result_t *config_result, const char *filename, int hot_r
 * 该函数用于写入日志，可以选择是否写入文件，默认输出为标准错误
 * 返回一个 指针，当一切正常时返回 NULL，出现错误时返回一个指针，调用者需要使用 free 释放掉指针指向的内存
 */
-char *log_to(const char *level, const char *event, const char *message, const char *event_path, const enum LOV_TYPE type);
+char *log_to(const char *level, const char *event, const char *message, const char *event_path, enum LOGTYPE type);
