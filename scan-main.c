@@ -153,6 +153,7 @@ char *receive_target(int read_fd)
 
 int main(int argc, char *argv[])
 {
+    log_to("INFO", "SCANNER-START", "扫描器启动", "scan-main.c->main", LOG_TYPE_FILE);
     int health_mode = 0;                   /* 用于控制健康检查模式，避免发生真实的扫描 */
     int debug_mode = 0;                    /* 用于控制 debug 模式 */
 
@@ -186,7 +187,11 @@ int main(int argc, char *argv[])
         printf("HEALTH CHECKING\n");
         
         if (!get_target_test("http://127.0.0.1:9999/scanner/target")) {
-            fprintf(stderr, "获取目标测试错误\n");
+            fprintf(stderr, "\033[31m获取目标测试错误\n\033[0m");
+            log_to("WARN", "HEALTH-CHECK", "健康检查出现错误", "scan-main.c->main->health_mode", LOG_TYPE_FILE);
+        }
+        else {
+            log_to("INFO", "HEALTH-CHECK", "健康检查成功", "scan-main.c->main->health_mode", LOG_TYPE_FILE);
         }
     }
     
@@ -194,7 +199,8 @@ int main(int argc, char *argv[])
     toml_result_t config_result = { 0 };
 
     if (loading_config(&config_result, "config.toml", 1) == -1) {
-        fprintf(stderr, "退出\n");
+        log_to("ERROR", "LOADING-CONFIG-ERROR", "加载配置文件错误", "scan-main.c->main->loading_config", LOG_TYPE_FILE);
+        fprintf(stderr, "\033[31m加载配置文件出现错误，退出\n\033[0m");
         toml_free(config_result);
         exit(0);
     }
@@ -222,6 +228,8 @@ int main(int argc, char *argv[])
     printf("email_notify.email = %s\n", email.u.s);
     printf("database.host = %s\ndatabase.port = %ld\ndatabase.db_name = %s\n", d_host.u.s, d_port.u.int64, d_name.u.s);
     printf("\n\n配置文件通过所有检查\n\n");
+
+    log_to("INFO", "CONFIG-CHECK", "配置文件检查成功", "scan-main.c->main", LOG_TYPE_FILE);
 
 
     setbuf(stdout, NULL); // 禁用缓冲，确保输出立即显示
@@ -251,11 +259,11 @@ int main(int argc, char *argv[])
     struct ScanData *data = malloc(sizeof(struct ScanData));
     if (!data) {
         fprintf(stderr, "Masscan data内存分配失败\n");
+        log_to("INFO", "CONFIG-CHECK", "配置文件检查成功", "scan-main.c->main", LOG_TYPE_FILE);
         clear_cache_manager(manager);
         PQfinish(conn);
         exit(1);
     }
-    printf("分配scan data成功\n");
     //ScanConfig* scan_config = malloc(sizeof(ScanConfig));
 
  //   if (!scan_config)
@@ -286,6 +294,7 @@ int main(int argc, char *argv[])
     if (!stop_signal && !health_mode) {
         scan(conn, data, manager);
         printf("扫描完成\n");
+        log_to("INFO", "SCAN-DONE", "扫描结束", "scan-main.c->main->stop_signal", LOG_TYPE_FILE);
     }
 
 
@@ -297,6 +306,8 @@ int main(int argc, char *argv[])
     clear_cache_manager(manager);
     toml_free(config_result);
     //free_scan_config(scan_config);
+    log_to("INFO", "CLEAN-DONE", "垃圾清理完毕，退出", "scan-main.c->main->clear", LOG_TYPE_ALL);
+        
     printf("垃圾清理完毕\n");
 
     return 0;
@@ -362,12 +373,15 @@ int scan_output_format_fd(PGconn *conn, int fd, struct ScanData *data, CacheMana
                     return 1;
                 }
                 else if (!strncmp(line_buffer, "ERROR", 5)) {
-                    printf("收到子进程信号：\033[31mERROR\033[0m\n");
+                    log_to("ERROR", "CHILD-ERROR-SIGNAL", "主进程收到子进程错误信号", "scan-main.c->scan_output_format_fd", LOG_TYPE_FILE);
+                        
+                    fprintf(stderr, "收到子进程信号：\033[31mERROR\033[0m\n");
                     stop_signal = 1;
                     return 0;
                 }
                 else if (!strncmp(line_buffer, "DONE_OK", 7)) {
-                    printf("收到子进程信号：\033[32mDONE_OK\033[0m\n");
+                    log_to("INFO", "CHILD-DONE_OK-SIGNAL", "主进程收到子进程结束信号", "scan-main.c->scan_output_format_fd", LOG_TYPE_FILE);
+                    fprintf(stderr, "收到子进程信号：\033[32mDONE_OK\033[0m\n");
                     stop_signal = 1;
                     return 1;
                 }
@@ -394,12 +408,14 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
 
     // 创建管道
     if (pipe(parent_to_child) == -1 || pipe(child_to_parent) == -1) {
+        log_to("ERROR", "CREATE-PIPE-ERROR", "创建管道失败", "scan-main.c->scan->pipe", LOG_TYPE_FILE);
         perror("\033[31m创建管道失败\n\033[0m");
         return 0;
     }
 
     pid = fork();
     if (pid == -1) {
+        log_to("ERROR", "CREATE-CHILD-ERROR", "创建子进程失败", "scan-main.c->scan->fork", LOG_TYPE_FILE);
         perror("\033[31m创建子进程失败\n\033[0m");
         return 0;
     }
@@ -426,6 +442,7 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             char *target = receive_target(parent_to_child[0]);
 
             if (target == NULL) {
+                log_to("ERROR", "RECEIVE-TARGET-ERROR", "接收目标信息失败", "scan-main.c->scan->child->receive_target", LOG_TYPE_FILE);
                 fprintf(stderr, "收到的目标为 NULL\n");
                 printf("ERROR\n");
                 printf("DONE_OK\n");
@@ -441,6 +458,7 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             wait_n = 0;
 
             if (!strcmp(target, "DONE")) {
+                log_to("INFO", "PARENT-DONE-SIGNAL", "子进程收到主进程结束信号", "scan-main.c->scan->child", LOG_TYPE_FILE);
                 printf("DONE_OK\n");
                 free(target);
                 break;  // 跳出循环但不退出进程
@@ -449,6 +467,7 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             root = cJSON_Parse(target);
 
             if (!check_target(root, &target_ip, &target_port, &source_port, &rate, 0)) {
+                log_to("ERROR", "CHECK-TARGET-ERROR", "检查目标出现错误", "scan-main.c->scan->child->check_target", LOG_TYPE_FILE);
                 printf("ERROR\n");
                 free(target);
                 cJSON_Delete(root);
@@ -459,7 +478,9 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             /*char *target = receive_target(parent_to_child[0]);*/
             if (!root || !target_ip || !target_port || !source_port || !rate) {
                 wait_n += 1;
-                fprintf(stderr, "\033[31mFailed to receive target: %s\n\033[0m", strerror(errno));
+                char *e_m = strerror(errno);
+                log_to("ERROR", "RECEIVE-TARGET-ERROR", e_m, "scan-main.c->scan->child->pipe", LOG_TYPE_FILE);
+                fprintf(stderr, "\033[31mFailed to receive target: %s\n\033[0m", e_m);
                 if (wait_n < 10) {
                     sleep(wait_n * 4);
                 }
@@ -480,6 +501,7 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             int status;
 
             if (posix_spawn_file_actions_init(&actions) != 0) {
+                log_to("ERROR", "POSIX_SPAWN-ERROR", "posix_spawn_file_actions_init错误", "scan-main.c->scan->child->posix_spawn_file_actions_init", LOG_TYPE_FILE);
                 fprintf(stderr, "posix_spawn_file_actions_init错误\n");
                 printf("ERROR\n");
                 
@@ -491,6 +513,7 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             if (posix_spawnattr_init(&attr) != 0) {
                 posix_spawn_file_actions_destroy(&actions);
                 printf("ERROR\n");
+                log_to("ERROR", "POSIX_SPAWN-ERROR", "posix_spawnattr_init错误", "scan-main.c->scan->child->posix_spawnattr_init错误", LOG_TYPE_FILE);
                 fprintf(stderr, "posix_spawnattr_init错误\n");
                 
                 free(target);
@@ -502,6 +525,7 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
                 posix_spawn_file_actions_destroy(&actions);
                 posix_spawnattr_destroy(&attr);
                 printf("ERROR\n");
+                log_to("ERROR", "POSIX_SPAWN-ERROR", "posix_spawnattr_setflags 错误", "scan-main.c->scan->child->posix_spawnattr_setflags", LOG_TYPE_FILE);
                 fprintf(stderr, "posix_spawnattr_setflags错误\n");
                 
                 free(target);
@@ -513,6 +537,7 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
                 posix_spawn_file_actions_destroy(&actions);
                 posix_spawnattr_destroy(&attr);
                 printf("ERROR\n");
+                log_to("ERROR", "POSIX_SPAWN-ERROR", "posix_spawn_file_actions_adddup2 错误", "scan-main.c->scan->child->posix_spawn_file_actions_adddup2", LOG_TYPE_FILE);
                 fprintf(stderr, "posix_spawn_file_actions_adddup2错误\n");
                 
                 free(target);
@@ -546,6 +571,8 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             posix_spawnattr_destroy(&attr);
 
             if (status != 0) {
+                log_to("ERROR", "POSIX_SPAWN-ERROR", "posix_spawnp 返回的状态值异常", "scan-main.c->scan->child->posix_spawnp", LOG_TYPE_FILE);
+                log_to("ERROR", "POSIX_SPAWN-ERROR", strerror(status), "scan-main.c->scan->child->posix_spawnp", LOG_TYPE_FILE);
                 fprintf(stderr, "posix_spawnp failed: %s\n", strerror(status));
                 printf("ERROR\n");
                 
@@ -569,7 +596,9 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             cJSON_Delete(root);
         }
 
+        log_to("INFO", "CLOSE-PIPE", "关闭管道 parent_to_child 的读取", "scan-main.c->scan->child->close", LOG_TYPE_FILE);
         close(parent_to_child[0]);
+        log_to("INFO", "EXIT-CHILD", "子进程关闭", "scan-main.c->scan->child->exit", LOG_TYPE_FILE);
         exit(0);
 
     }
@@ -585,13 +614,33 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             // 检查子进程状态
             int status;
             pid_t result = waitpid(pid, &status, WNOHANG);
+
+            if (!result) {
+                sleep(1);
+                continue;
+            }
+            
             if (result > 0) {
                 fprintf(stderr, "Child process exited with status %d\n", WEXITSTATUS(status));
                 child_exited = 1;
                 break;
             }
             else if (result == -1) {
-                perror("waitpid failed");
+                int tmp = errno;
+                
+                if (tmp == ECHILD) {
+                    log_to("ERROR", "WAIT-CHILD-ERROR", "等待子进程出现错误，指定的子进程不存在（ECHILD）", "scan-main.c->scan->parent", LOG_TYPE_FILE);
+                    fprintf(stderr, "错误: 指定的子进程不存在 (ECHILD)\n");
+                }
+                else if (tmp == EINTR) {
+                    log_to("WARN", "WAIT-CHILD-ERROR", "等待子进程警告，等待信号中断（EINTR）", "scan-main.c->scan->parent", LOG_TYPE_FILE);
+                    fprintf(stderr, "警告: 等待被信号中断 (EINTR)\n");
+                }
+                else {
+                    log_to("ERROR", "WAIT-CHILD-ERROR", strerror(tmp), "scan-main.c->scan->parent->send_target", LOG_TYPE_FILE);
+                    fprintf(stderr, "waitpid 失败，错误码 %d: %s\n", tmp, strerror(tmp));
+                }
+
                 child_exited = 1;
                 break;
             }
@@ -619,6 +668,8 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
 
 
             if (!send_target(parent_to_child[1], http_result)) {
+                log_to("ERROR", "SEND-TARGET-ERROR", "向子进程发送目标信息失败", "scan-main.c->scan->parent->send_target", LOG_TYPE_FILE);
+                log_to("ERROR", "SEND-TARGET-ERROR", http_result, "scan-main.c->scan->parent->send_target", LOG_TYPE_FILE);
                 fprintf(stderr, "Failed to send target: %s\n", http_result);
                 free(http_result);
                 break;
@@ -629,6 +680,7 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
 
             // 处理扫描输出 - 修改为直接从文件描述符读取
             if (!scan_output_format_fd(conn, child_to_parent[0], ScanData, manager, "masscan")) {
+                log_to("ERROR", "FORMAT-OUTPUT-ERROR", "格式化子进程输出失败", "scan-main.c->scan->parent->scan_output_format_fd", LOG_TYPE_FILE);
                 printf("scan_output_format 失败，退出\n");
                 clear_cache_data(manager);
                 close(parent_to_child[1]);
@@ -655,24 +707,3 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
 
     return 1;
 }
-
-
-//int check_scan_config(ScanConfig* scan_config)
-//{
-//    if (!scan_config->target_ip || !scan_config->target_port || !scan_config->scanner_path || !scan_config->banner_scan_ip || !scan_config->rate)
-//    {
-//        return 0;
-//    }
-//    return 1;
-//}
-
-//int free_scan_config(ScanConfig* scan_config)
-//{
-//    if (scan_config->target_ip) free(scan_config->target_ip);
-//    if (scan_config->target_port) free(scan_config->target_port);
-//    if (scan_config->scanner_path) free(scan_config->scanner_path);
-//    if (scan_config->banner_scan_ip) free(scan_config->banner_scan_ip);
-//    if (scan_config->rate) free(scan_config->rate);
-//    return 1;
-//}
-

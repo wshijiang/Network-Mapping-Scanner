@@ -2,6 +2,7 @@
 *.d
 .editorconfig
 build/
+logs/
 scanner
 *.sln
 *.vcxproj
