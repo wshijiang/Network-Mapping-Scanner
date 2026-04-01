@@ -17,7 +17,8 @@ SRCS := \
 	time-and-json.c \
 	config.c \
 	health_check.c \
-	cargs.c
+	cargs.c \
+	log.c
 
 
 OBJS := $(SRCS:%.c=$(OBJ_DIR)/%.o)
