@@ -58,23 +58,28 @@ int new_log_file(const time_t *now, const int roalling, const char *message)
 
 /*
 * 该函数用于写入日志，可以选择是否写入文件，默认输出为标准错误
-* 返回一个 指针，当一切正常时返回 NULL，出现错误时返回一个指针，调用者需要使用 free 释放掉指针指向的内存
+* 当一切正常时返回 1，出现错误时返回 0，且在标准错误中打印相关信息
 */
-char *log_to(const char *level, const char *event, const char *message, const char *event_path, enum LOGTYPE type)
+int log_to(const char *level, const char *event, const char *message, const char *event_path, enum LOGTYPE type)
 {
 	cJSON *log_item = NULL, *i_timestamp = NULL, *i_level = NULL, *i_path = NULL;
 	cJSON *i_fields = NULL, *i_event = NULL, *i_message = NULL;
 	char *log_message = NULL;
+	char l_time[20 + 5] = { 0 };
 
 	log_item = cJSON_CreateObject();
 	i_fields = cJSON_CreateObject();
 
+	time_t now = time(NULL);
+	strftime(l_time, sizeof l_time, "%F %T%z", localtime(&now));
+
 	if (log_item == NULL || i_fields == NULL) {
 		cJSON_Delete(log_item);
-		return "[ERROR]-[log.c->log_to->cJSON_CreateObject]-[cJSON_CreateObject-ERROR]-\"cJSON_CreateObject 出现了错误\"\n";
+		fprintf(stderr, "%s [ERROR]-[log.c->log_to->cJSON_CreateObject]-[cJSON_CreateObject-ERROR]-\"cJSON_CreateObject 出现了错误\"\n", l_time);
+		fprintf(stderr, "\033[31m日志文件写入失败\n\033[0m");
+		return 0;
 	}
-
-	time_t now = time(NULL);
+	
 	i_timestamp = cJSON_CreateNumber(now);
 	i_level = cJSON_CreateString(level);
 	i_path = cJSON_CreateString(event_path);
@@ -90,42 +95,41 @@ char *log_to(const char *level, const char *event, const char *message, const ch
 		) {
 		cJSON_Delete(log_item);
 
-		/* 使用 snprintf 计算的所需长度不包含 '\0' */
-		size_t len = snprintf(NULL, 0, "%ld-[%s]-[%s]-[%s]-\"%s\"\n", i_timestamp, "ERROR", "log.c->log_to->cJSON_AddItemToObject", "cJSON_AddItemToObject-ERROR", "添加至 JSON 键值对时错误");
-		char *r_e_message = (char *)malloc(len + 1);
-
-		if (r_e_message == NULL) {
-			cJSON_Delete(log_item);
-			
-			return "[ERROR]-[malloc-error]-\"log.c->log_to:分配内存失败\"\n";
-		}
-		if (snprintf(r_e_message, len + 1, "%ld-[%s]-[%s]-[%s]-\"%s\"\n", i_timestamp, "ERROR", "log.c->log_to->cJSON_AddItemToObject", "cJSON_AddItemToObject-ERROR", "添加至 JSON 键值对时错误") == len) {
-			return r_e_message;
-		}
-		else {
-			return "[ERROR]-[log.c->log_to->snprintf]-[snprintf-error]-\"snprintf 写入数据与预期不符\"\n";
-		}
+		fprintf(stderr, "%s [ERROR]-[log.c->log_to->cJSON_AddItemToObject]-[cJSON_AddItemToObject-ERROR]-\"添加至 JSON 键值对时错误\"\n", l_time);
+		fprintf(stderr, "\033[31m日志文件写入失败\n\033[0m");
+		return 0;
 	}
 
-	log_message = cJSON_Print(log_item);
+	log_message = cJSON_PrintUnformatted(log_item);
 
 	if (log_message == NULL) {
 		fprintf(stderr, "打印json结构失败\n");
-
-		return "[ERROR]-[log.c->log_to->cJSON_Print]-[cJSON_Print-ERROR]-\"cJSON_Print 返回值为 NULL\"\n";
+		cJSON_free(log_message);
+		cJSON_Delete(log_item);
+		fprintf(stderr, "%s [ERROR]-[log.c->log_to->cJSON_Print]-[cJSON_Print-ERROR]-\"cJSON_Print 返回值为 NULL\"\n", l_time);
+		fprintf(stderr, "\033[31m日志文件写入失败\n\033[0m");
+		return 0;
 	}
 
 
 	switch (type) {
 	case LOG_TYPE_FILE:
 		if (!new_log_file(&now, 1, log_message)) {
-			return "[ERROR]-[log.c->log_to->new_log_file]-[new_log_file-ERROR]-\"new_log_file 出现了错误\"\n";
+			cJSON_free(log_message);
+			cJSON_Delete(log_item);
+			fprintf(stderr, "%s [ERROR]-[log.c->log_to->new_log_file]-[new_log_file-ERROR]-\"new_log_file 出现了错误\"\n", l_time);
+			fprintf(stderr, "\033[31m日志文件写入失败\n\033[0m");
+			return 0;
 		}
 		
 		return NULL;
 	case LOG_TYPE_CONSOLE:
+		cJSON_free(log_message);
+		cJSON_Delete(log_item);
 		return NULL;
 	case LOG_TYPE_ALL:
+		cJSON_free(log_message);
+		cJSON_Delete(log_item);
 		return NULL;
 	}
 }
