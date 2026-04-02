@@ -354,8 +354,8 @@ int scan_output_format_fd(PGconn *conn, int fd, struct ScanData *data, CacheMana
                     // 将banner清空，避免脏数据污染
                     memset(data->banner, 0, sizeof(data->banner));
                     unsigned int port;
-                    //char protocol[10], ipv4[16], service[128], banner[7168];
-                    if (sscanf(line_buffer, "Banner %u %9s %39s %127s %7167[^\n]", &data->port, data->protocol, data->ip, data->service, data->banner) == 5) {
+                    
+                    if (sscanf(line_buffer, "Banner on port %u/%9s on %39s: %127s %7167[^\n]", &data->port, data->protocol, data->ip, data->service, data->banner) == 5) {
                         // 清除多余的空格
                         trim_trailing_spaces(data->banner);
                         if (stop_signal) return 0;
