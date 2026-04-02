@@ -234,78 +234,79 @@ PGconn* connect_to_postgresql(const DbConnectInfo* info, const unsigned retry_ti
 /**
 * NOTE记住，还有个other参数需要处理
 */
-int insert_batch_data(const PGconn* conn, const CacheManager* manager)
+int insert_batch_data(const PGconn *conn, const CacheManager *manager)
 {
-	IPEntry* entry, * temp;
-	//PGresult* res = NULL;
+	IPEntry *entry, *temp;
 
-	//const unsigned count = manager->total_records;
-
-	const char* insert_ip_table_sql = 
-		"INSERT INTO ips (ip_address, asn, isp) VALUES ( $1, $2, $3 ) RETURNING ip_id;";
-	const char* insert_ip_table_sql2 =
+	const char *insert_ip_table_sql2 =
 		"INSERT INTO ips (ip_address, task_id) VALUES ($1, $2) "
 		"ON CONFLICT (ip_address) DO UPDATE SET "
 		"update_time = (EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000)::BIGINT "
 		"RETURNING ip_id;";
-	const char* insert_port_table_sql =
+	const char *insert_port_table_sql =
 		"INSERT INTO ports (ip_id, port) VALUES ($1, $2) "
 		"ON CONFLICT (ip_id, port) DO UPDATE SET "
 		"update_time = (EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000)::BIGINT "
 		"RETURNING port_id;";
-	const char* insert_scan_info_sql = 
-		"INSERT INTO scaninfo ( port_id, scanner_name, protocol, service, banner, other ) VALUES ( $1, $2, $3, $4, $5, $6 );";
-	const char* insert_scan_info_no_other_sql = 
-		"INSERT INTO scaninfo ( port_id, scanner_name, protocol, service, banner ) VALUES ( $1, $2, $3, $4, $5 );";
-	
 
-	/*开启postgresql数据库事务功能*/
-	if (!postgresql_transaction(conn, "BEGIN")) return 0; //提前退出
+	/*
+	* service / banner 均允许 NULL，使用支持 NULL 参数的写法
+	* PQexecParams 中 paramValues[i] == NULL 会被解释为 SQL NULL
+	*/
+	const char *insert_scan_info_sql =
+		"INSERT INTO scaninfo ( port_id, scanner_name, protocol, service, banner ) "
+		"VALUES ( $1, $2, $3, $4, $5 );";
+
+	if (!postgresql_transaction(conn, "BEGIN")) return 0;
 
 	HASH_ITER(hh, manager->ip_table, entry, temp)
 	{
-		PGresult* res = NULL; //每次循环都需要重新分配res
-		unsigned rows, columns; //存储返回的行和列数量
-		{ /*插入ips表*/
-			
-			const char* sql_param_values[] = { entry->ip, "2" }; //暂时不管这个,还有asn和isp
+		PGresult *res = NULL;
 
+		/* 插入 ips 表 */
+		{
+			const char *sql_param_values[] = { entry->ip, "2" };
 			if (!to_table(conn, &res, insert_ip_table_sql2, sql_param_values, 2)) return 0;
-
 		}
 
-		/*获取扫描器名称*/
-		const char* scanner_names = entry->scanner_name;
+		char ip_id[32];
+		strncpy(ip_id, PQgetvalue(res, 0, 0), sizeof(ip_id) - 1);
+		ip_id[sizeof(ip_id) - 1] = '\0';
+		PQclear(res);  
 
-		{ /*插入ports表*/
-			const char* ip_id = PQgetvalue(res, 0, 0);
+		for (unsigned i = 0; i < entry->info_count; i++)
+		{
+			struct Info *info = &entry->infos[i];
 
-			for (unsigned i = 0; i < entry->info_count; i++)
+			char port_str[10];
+			snprintf(port_str, sizeof(port_str), "%u", info->port);
 			{
-				
-				Info* info = &entry->infos[i];
-				char ports[10];
-				sprintf(ports, "%d", info->port);
-				const char* sql_param_values1[] = { ip_id, ports };
+				const char *sql_param_values[] = { ip_id, port_str };
+				if (!to_table(conn, &res, insert_port_table_sql, sql_param_values, 2)) return 0;
+			}
 
-				//NOTE:日后需要添加详细注释
-				if (!to_table(conn, &res, insert_port_table_sql, sql_param_values1, 2)) return 0;
+			char port_id[32];
+			strncpy(port_id, PQgetvalue(res, 0, 0), sizeof(port_id) - 1);
+			port_id[sizeof(port_id) - 1] = '\0';
+			PQclear(res);  
 
-				const char* port_id = PQgetvalue(res, 0, 0);
-
-				const char* sql_param_values2[] = { port_id, entry->scanner_name, info->protocol, info->service, info->banner };
-
-				//BUG:还需要处理other参数，jsonb格式
-
-				if (!to_table(conn, &res, insert_scan_info_no_other_sql, sql_param_values2, 5)) return 0;
-				
-				//PQclear(res);
-
+			for (unsigned j = 0; j < info->service_count; j++)
+			{
+				struct Service_i *svc = &info->services[j];
+				const char *sql_param_values[] = {
+					port_id,
+					entry->scanner_name,
+					info->protocol,
+					svc->s,
+					svc->b
+				};
+				if (!to_table(conn, &res, insert_scan_info_sql, sql_param_values, 5)) return 0;
+				PQclear(res);  
 			}
 		}
-		PQclear(res);
 	}
-	postgresql_transaction(conn, "COMMIT");
+
+	if (!postgresql_transaction(conn, "COMMIT")) return 0;
 	return 1;
 }
 

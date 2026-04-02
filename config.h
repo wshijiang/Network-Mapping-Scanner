@@ -1,3 +1,6 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
 #include <string.h>
 #include <time.h>
 #include <stdio.h>
@@ -35,3 +38,4 @@ int loading_config(toml_result_t *config_result, const char *filename, int hot_r
 * 当一切正常时返回 1，出现错误时返回 0，且在标准错误中打印相关信息
 */
 int log_to(const char *level, const char *event, const char *message, const char *event_path, enum LOGTYPE type);
+#endif // !CONFIG_H
