@@ -331,8 +331,8 @@ void trim_trailing_spaces(char *str)
 // 新增函数：直接从文件描述符读取而不是FILE*
 int scan_output_format_fd(PGconn *conn, int fd, struct ScanData *data, CacheManager *manager, const char *scanner_name)
 {
-    char buffer[8192];
-    char line_buffer[8192];
+    char buffer[65536];
+    char line_buffer[65536];
     int line_pos = 0;
 
     while (!stop_signal) {
@@ -349,22 +349,58 @@ int scan_output_format_fd(PGconn *conn, int fd, struct ScanData *data, CacheMana
             if (buffer[i] == '\n') {
                 line_buffer[line_pos] = '\0';
 
-                // 处理完整的一行
+
+                if (!strncmp(line_buffer, "Discovered", 10)) {
+                    if (sscanf(line_buffer, "Discovered  %u %9s %39s", &data->port, data->protocol, data->ip) == 3) {
+                        if (stop_signal) {
+                            log_to("INFO", "STOP-SIGNAL", "stop_signal 信号为 1", "scan-main.c->scan_output_format_fd", LOG_TYPE_FILE);
+                            return 0;
+                        }
+
+                        if (check_write(manager)) {
+                            log_to("INFO", "WRITE", "检查写入条件成功，符合写入条件", "scan-main.c->scan_output_format_fd", LOG_TYPE_FILE);
+                            
+                            if (!write_to_database(conn, manager)) {
+                                log_to("ERROR", "WRITE-DATABASE-ERROR", "写入数据库错误", "scan-main.c->scan_output_format_fd->write_to_database", LOG_TYPE_FILE);
+                                return 0;
+                            }
+                            if (!add_scan_result_to_cache(manager, data->ip, scanner_name, data->port, NULL, data->protocol, NULL)) {
+                                return 0;
+                            }
+                        }
+                        else if (!add_scan_result_to_cache(manager, data->ip, scanner_name, data->port, NULL, data->protocol, NULL)) {
+                            log_to("ERROR", "ADD-RESULT-TO-CACHE-ERROR", "向缓存添加数据失败", "scan-main.c->scan_output_format_fd->add_scan_result_to_cache", LOG_TYPE_FILE);
+                            return 0;
+                        }
+                    }
+                }
+
                 if (!strncmp(line_buffer, "Banner", 6)) {
                     // 将banner清空，避免脏数据污染
                     memset(data->banner, 0, sizeof(data->banner));
-                    unsigned int port;
                     
-                    if (sscanf(line_buffer, "Banner on port %u/%9s on %39s: %127s %7167[^\n]", &data->port, data->protocol, data->ip, data->service, data->banner) == 5) {
+                    if (sscanf(line_buffer, "Banner %u %9s %39s %127s %7167[^\n]", &data->port, data->protocol, data->ip, data->service, data->banner) == 5) {
                         // 清除多余的空格
                         trim_trailing_spaces(data->banner);
-                        if (stop_signal) return 0;
+                        if (stop_signal) {
+                            log_to("INFO", "STOP-SIGNAL", "stop_signal 信号为 1", "scan-main.c->scan_output_format_fd", LOG_TYPE_FILE);
+                            return 0;
+                        }
 
                         if (check_write(manager)) {
-                            if (!write_to_database(conn, manager)) return 0;
+                            log_to("INFO", "WRITE", "检查写入条件成功，符合写入条件", "scan-main.c->scan_output_format_fd", LOG_TYPE_FILE);
+                            if (!write_to_database(conn, manager)) {
+                                log_to("ERROR", "WRITE-DATABASE-ERROR", "写入数据库错误", "scan-main.c->scan_output_format_fd->write_to_database", LOG_TYPE_FILE);
+                                return 0;
+                            }
+                            if (!add_scan_result_to_cache(manager, data->ip, scanner_name, data->port, NULL, data->protocol, NULL)) {
+                                return 0;
+                            }
                         }
-                        else if (!add_scan_result_to_cache(manager, data->ip, scanner_name, data->port, data->service, data->protocol, data->banner))
+                        else if (!add_scan_result_to_cache(manager, data->ip, scanner_name, data->port, data->service, data->protocol, data->banner)) {
+                            log_to("ERROR", "ADD-RESULT-TO-CACHE-ERROR", "向缓存添加数据失败", "scan-main.c->scan_output_format_fd->add_scan_result_to_cache", LOG_TYPE_FILE);
                             return 0;
+                        }
                     }
                 }
                 else if (!strncmp(line_buffer, "COMPLETE", 8)) {
@@ -615,10 +651,10 @@ int scan(PGconn *conn, struct ScanData *ScanData, CacheManager *manager)
             int status;
             pid_t result = waitpid(pid, &status, WNOHANG);
 
-            if (!result) {
-                sleep(1);
-                continue;
-            }
+            //if (!result) {
+            //    sleep(1);
+            //    continue;
+            //}
             
             if (result > 0) {
                 fprintf(stderr, "Child process exited with status %d\n", WEXITSTATUS(status));
