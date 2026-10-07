@@ -121,6 +121,17 @@ fn validate(cfg: &AppConfig) -> Result<(), ScannerError> {
             "must be between 1 and 2147483647",
         ),
         (
+            "scanner.masscan_wait_seconds",
+            cfg.scanner.masscan.wait_seconds > 300,
+            "must be between 0 and 300",
+        ),
+        (
+            "scanner.masscan_max_runtime_seconds",
+            !(1..=604_800).contains(&cfg.scanner.masscan.max_runtime_seconds)
+                || cfg.scanner.masscan.max_runtime_seconds <= cfg.scanner.masscan.wait_seconds,
+            "must be between 1 and 604800 and greater than masscan_wait_seconds",
+        ),
+        (
             "upload.endpoint",
             cfg.upload.endpoint.is_empty(),
             "must not be empty",
@@ -354,5 +365,42 @@ mod tests {
         assert!(updated.contains("runtime_token = \"\""));
         assert!(!updated.contains("one-time-secret"));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn masscan_configuration_validates_limits_and_output_mode() {
+        let raw = include_str!("../config.toml");
+        let mut cfg: AppConfig = toml_edit::de::from_str(raw).unwrap();
+        assert_eq!(cfg.scanner.masscan, crate::types::MasscanConfig::default());
+        cfg.scanner.masscan.wait_seconds = 301;
+        assert!(
+            validate(&cfg)
+                .unwrap_err()
+                .to_string()
+                .contains("masscan_wait_seconds")
+        );
+        cfg.scanner.masscan.wait_seconds = 10;
+        for limit in [0, 10, 604_801] {
+            cfg.scanner.masscan.max_runtime_seconds = limit;
+            assert!(
+                validate(&cfg)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("masscan_max_runtime_seconds")
+            );
+        }
+        let explicit = raw.replace("[scanner]", "[scanner]\nmasscan_output_mode = \"standard_list\"\nmasscan_wait_seconds = 0\nmasscan_max_runtime_seconds = 60");
+        let cfg: AppConfig = toml_edit::de::from_str(&explicit).unwrap();
+        assert_eq!(
+            cfg.scanner.masscan.output_mode,
+            crate::types::MasscanOutputMode::StandardList
+        );
+        assert_eq!(cfg.scanner.masscan.wait_seconds, 0);
+        assert_eq!(cfg.scanner.masscan.max_runtime_seconds, 60);
+        validate(&cfg).unwrap();
+        assert!(
+            toml_edit::de::from_str::<AppConfig>(&explicit.replace("standard_list", "invalid"))
+                .is_err()
+        );
     }
 }

@@ -114,16 +114,28 @@ pub(crate) async fn run_scan(
 `service_inventory` 与 `service_detection`。启用并验证 Nuclei 二进制及模板目录后才声明
 `vulnerability_scan` 与 `vulnerability_detection`，供服务端能力调度使用。
 
-Masscan 输出行解析：
-- `Discovered <port> <protocol> <ip>` → `PortObservation`
-- `open <protocol> <port> <ip> <timestamp>` → 标准 masscan list 格式
-- `ERROR` → 返回错误
-- `COMPLETE` / `DONE_OK` → 正常结束
+masscan 通过本地 `scanner.masscan_output_mode` 选择输出契约：
 
-masscan 只有在进程退出码为 0 时才算执行成功。非零退出码会连同最多 4096 个字符的 stderr 作为扫描错误上报，任务不会上传空结果并误标为成功；退出码为 0 且没有发现开放端口仍属于合法的空结果。
+- `compatible`（默认）保留旧启动参数，接受标准 list、官方控制台的
+  `Discovered open port <port>/<protocol> on <ip>` 和旧的 `Discovered <port> <protocol> <ip>`。
+- `standard_list` 额外传入 `--nointeractive --open-only --wait <seconds>`，仅接受 list
+  数据、空行和注释；JSON/XML、旧完成标记或其他非预期 stdout 都会报错。
+- 标准记录 `open <protocol> <port> <ip> <timestamp>` 校验 IP、端口、协议与 Unix 秒时间戳；
+  时间戳转换为毫秒。旧格式使用接收时间。按 IP/协议/端口去重，优先保留标准时间戳。
+- 非开放状态以及非 TCP/UDP 的合法 list 记录过滤；字段损坏在两种模式下都使阶段失败。
+- `COMPLETE` / `DONE_OK` 在兼容模式下仅记为提示，继续读取后续结果。
+  `ERROR` 作为输出错误处理。其他兼容日志会计数并警告，JSON/XML 始终报错。
 
-masscan 始终使用机器可读的 list 输出，不启用 `--banner`。旧的 `Discovered` 行仍保留解析兼容，
-但不再接收 masscan 的服务识别结果。
+只有 stdout/stderr 正常读完、进程退出码为 0 且没有取消、超时或解析错误才算成功。
+零结果可以没有头尾注释，不能要求必须出现完成标记。stdout 每行最多 4096 字节，
+stderr 按块排空并最多保留 4096 字节；非零退出、读取失败和解析失败复用现有外部进程诊断。
+取消及默认 86400 秒的总时限覆盖读取和等待退出；没有结果行不会触发空闲超时。
+错误和取消路径终止并回收子进程，清理等待与 stderr 排空分别限制为 2 秒。
+
+masscan 不启用 banner 探测；服务识别继续由 zgrab2 完成。输出模式、收包等待和运行时限
+均属于本地配置，不能被服务端远程修改。默认配置保留旧检查点的兼容键；非默认 masscan
+配置加入检查点标识，配置改变时不复用原扫描阶段。已生成的上传批次不受影响。
+完整的参数、迁移验证与回滚步骤见[masscan 标准输出适配与迁移](MASSCAN.md)。
 
 #### `scan/engines/zgrab2.rs`
 
@@ -471,9 +483,11 @@ endpoint = "https://example.com/api/scanner/result"
 | `scanner.c_server` | string | — | 目标 API 主机名 |
 | `scanner.c_port` | int | — | 目标 API 端口 |
 | `scanner.rate` | int | — | masscan 本地发包速率 |
-| `scanner.source_port` | int | `61000` | masscan 源端口，范围 1-65535 |
 | `scanner.verify_tls` | bool | `false` | 是否验证 TLS 证书 |
 | `scanner.scanner_path` | string | `"./a"` | 扫描器二进制路径；也可填写能从 `PATH` 解析的命令名 |
+| `scanner.masscan_output_mode` | string | `"compatible"` | `compatible` 或 `standard_list`，本地决定输出契约 |
+| `scanner.masscan_wait_seconds` | int | `10` | 官方模式的收包等待时间，范围 0-300 秒；兼容模式不传入该参数 |
+| `scanner.masscan_max_runtime_seconds` | int | `86400` | 每次 masscan 调用的总时限，范围 1-604800 秒，必须大于收包等待 |
 | `scanner.scanner_id` | string | `""` | 仅用于从旧 TOML 迁移 UUIDv7 身份；新身份存入 SQLite |
 | `scanner.runtime_token` | string | `""` | 仅用于从旧 TOML 迁移运行令牌；新令牌存入 SQLite |
 | `scanner.connect_timeout_seconds` | int | `5` | 建立服务端连接的超时，范围 1-60 秒 |
@@ -517,7 +531,6 @@ endpoint = "https://example.com/api/scanner/result"
 | `scanner.c_server` | 非空 |
 | `scanner.c_port` | > 0 |
 | `scanner.rate` | 1-2147483647 |
-| `scanner.source_port` | 1-65535 |
 | `scanner.scanner_path` | 普通扫描启动时必须能解析到存在且可执行的普通文件 |
 | `service_detection.zgrab_path` | enabled=true 时必须能解析到存在且可执行的普通文件 |
 | `nuclei.path` | enabled=true 时必须能解析到存在且可执行的普通文件 |
