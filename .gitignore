@@ -15,3 +15,10 @@ scanner-state.sqlite3-shm
 *.diagnostics.sqlite3-journal
 *.diagnostics.lock
 *.diagnostics-spool/
+
+# Docker runtime secrets and generated build artifacts
+/docker/runtime/
+/docker/output/
+/docker/.env
+/_frontend/
+/docker/__pycache__/
