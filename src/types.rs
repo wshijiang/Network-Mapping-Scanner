@@ -330,7 +330,7 @@ pub(crate) struct AppConfig {
     pub(crate) nuclei: NucleiConfig,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct NucleiConfig {
     pub(crate) port_fallback: bool,
@@ -378,7 +378,7 @@ pub(crate) fn default_service_runtime() -> u64 {
     1800
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct ServiceDetectionConfig {
     #[serde(default = "default_batch_endpoints")]
@@ -440,7 +440,7 @@ impl Default for ServiceDetectionConfig {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct DnsConfig {
     pub(crate) enabled: bool,
@@ -458,7 +458,7 @@ impl Default for DnsConfig {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct NetworkConfig {
     pub(crate) ipv4_enabled: bool,
@@ -486,7 +486,7 @@ fn default_scanner_path() -> String {
     "./a".into()
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MasscanOutputMode {
     #[default]
@@ -494,7 +494,7 @@ pub(crate) enum MasscanOutputMode {
     StandardList,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct MasscanConfig {
     #[serde(rename = "masscan_output_mode")]
@@ -515,7 +515,7 @@ impl Default for MasscanConfig {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ScannerConfig {
     pub(crate) c_server: String,
     pub(crate) c_port: i64,
@@ -527,10 +527,10 @@ pub(crate) struct ScannerConfig {
     #[serde(flatten)]
     pub(crate) masscan: MasscanConfig,
     /// Legacy TOML identity, imported into SQLite during upgrade.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub(crate) scanner_id: String,
     /// Legacy TOML runtime token, imported into SQLite during upgrade.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub(crate) runtime_token: String,
     #[serde(default = "default_heartbeat_interval")]
     pub(crate) heartbeat_interval_seconds: u64,

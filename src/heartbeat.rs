@@ -197,6 +197,8 @@ impl ActiveTask {
 
 #[derive(Serialize)]
 struct HeartbeatPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_config_check: Option<crate::config_check::ConfigCheck>,
     diagnostics: crate::diagnostics::protocol::Capabilities,
     diagnostic_health: serde_json::Value,
     scanner_id: Uuid,
@@ -273,6 +275,7 @@ struct HeartbeatLease {
 
 #[derive(Clone)]
 pub(crate) struct HeartbeatClient {
+    local_config_check: Option<crate::config_check::ConfigCheck>,
     diagnostics: Option<crate::diagnostics::DiagnosticsHandle>,
     client: ServerHttpClient,
     heartbeat_url: String,
@@ -301,6 +304,10 @@ struct MaintenanceProbeResponse {
 }
 
 impl HeartbeatClient {
+    pub(crate) fn with_config_check(mut self, report: crate::config_check::ConfigCheck) -> Self {
+        self.local_config_check = Some(report);
+        self
+    }
     pub(crate) fn with_diagnostics(
         mut self,
         handle: crate::diagnostics::DiagnosticsHandle,
@@ -325,6 +332,7 @@ impl HeartbeatClient {
         runtime_configuration: RuntimeConfiguration,
     ) -> Self {
         Self {
+            local_config_check: None,
             diagnostics: None,
             client,
             heartbeat_url: endpoints.heartbeat,
@@ -377,6 +385,7 @@ impl HeartbeatClient {
             "idle"
         };
         let payload = HeartbeatPayload {
+            local_config_check: self.local_config_check.clone(),
             diagnostics: self
                 .diagnostics
                 .as_ref()

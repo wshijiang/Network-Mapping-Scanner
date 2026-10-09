@@ -1,5 +1,6 @@
 mod cache;
 mod config;
+mod config_check;
 mod diagnostics;
 mod error;
 mod health;
@@ -500,7 +501,8 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
         cfg.scanner.runtime_configuration_url(),
         runtime_configuration.clone(),
     )
-    .with_diagnostics(diagnostics_runtime.handle.clone());
+    .with_diagnostics(diagnostics_runtime.handle.clone())
+    .with_config_check(loaded.check.clone());
     let active_task = ActiveTask::default();
     let stop_bridge_handle = spawn_active_task_stop_bridge(active_task.clone());
     let heartbeat_handle = spawn_heartbeat(

@@ -4,6 +4,7 @@ use crate::types::AppConfig;
 /// Parsed config + raw content kept for comment-preserving writes.
 pub(crate) struct LoadedConfig {
     pub(crate) app: AppConfig,
+    pub(crate) check: crate::config_check::ConfigCheck,
     raw: String,
     path: String,
 }
@@ -18,6 +19,17 @@ pub(crate) fn load(path: &str) -> Result<LoadedConfig, ScannerError> {
         .parse()
         .map_err(|e| ScannerError::Config(format!("failed to parse config {}: {}", path, e)))?;
 
+    let value: serde_json::Value = toml_edit::de::from_str(&raw)
+        .map_err(|_| ScannerError::Config("cannot inspect TOML configuration".into()))?;
+    let check = crate::config_check::inspect_scanner(&value)
+        .map_err(|_| ScannerError::Config("cannot construct configuration field catalog".into()))?;
+    check.emit_startup();
+    if check.error_count() > 0 {
+        return Err(ScannerError::Config(
+            "缺少必需配置，请根据启动提示补齐参数".into(),
+        ));
+    }
+
     let app: AppConfig = toml_edit::de::from_document(doc).map_err(|e| {
         ScannerError::Config(format!("failed to deserialize config {}: {}", path, e))
     })?;
@@ -30,6 +42,7 @@ pub(crate) fn load(path: &str) -> Result<LoadedConfig, ScannerError> {
     );
     Ok(LoadedConfig {
         app,
+        check,
         raw,
         path: path.to_owned(),
     })

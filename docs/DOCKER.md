@@ -1,5 +1,7 @@
 # Docker 扫描端部署
 
+启动配置检查兼容文件部署和 Docker 只读配置挂载；终端、日志及控制端 Web 提示见 [启动配置检查](CONFIG_CHECK.md)。
+
 [项目首页](../README.md) · [文档中心](README.md) · [masscan](MASSCAN.md) · [恢复](recovery.md)
 
 镜像 `ghcr.io/wshijiang/network-mapping-scanner` 支持 Linux AMD64/ARM64，包含 scanner-rs、
