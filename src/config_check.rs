@@ -3,6 +3,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+include!(concat!(env!("OUT_DIR"), "/public_config_fields.rs"));
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigIssueKind {
@@ -26,6 +28,8 @@ pub struct ConfigCheck {
     pub version: String,
     pub checked_at: DateTime<Utc>,
     pub items: Vec<ConfigIssue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public_fields: Vec<String>,
 }
 
 impl ConfigCheck {
@@ -35,6 +39,7 @@ impl ConfigCheck {
             version: env!("CARGO_PKG_VERSION").into(),
             checked_at: Utc::now(),
             items: Vec::new(),
+            public_fields: Vec::new(),
         };
         for field in required {
             if lookup(raw, field).is_none() {
@@ -66,13 +71,18 @@ impl ConfigCheck {
             }
             return;
         }
-        // Null means an intentionally unconfigured Option, not a missing requirement.
-        // Legacy identity is stored in SQLite and is never a configuration notice.
-        if value.is_null() || lookup(raw, prefix).is_some() || sensitive(prefix) {
+        // None describes the unset default; it does not suppress a missing
+        // public field. Public-schema and source filters decide eligibility.
+        if lookup(raw, prefix).is_some() || sensitive(prefix) {
             return;
         }
         let section = prefix.split('.').next().unwrap_or_default();
         let source = source_for(prefix);
+        // Web-managed runtime fields live in the server database and are sent
+        // to the scanner. Their omitted TOML fallback values need no notice.
+        if source == "remote_override" {
+            return;
+        }
         let enabled_path = match section {
             "report_mail" => "report_mail.remote_images_enabled".into(),
             _ => format!("{section}.enabled"),
@@ -82,20 +92,25 @@ impl ConfigCheck {
             .and_then(Value::as_bool)
             == Some(false);
         let optional = inactive && prefix != enabled_path;
-        let description = if source == "database_seed" {
-            "仅作为数据库首次初始化的种子；已有运行策略请在 Web 管理页面调整。"
-        } else if optional {
+        let description = if optional {
             "本地功能未启用，此参数无需补齐；启用时请检查相关配置。"
+        } else if value.is_null() {
+            "此参数未显式配置，当前保持未设置；如需调整，请修改启动配置并重启。"
         } else if source == "local_limit" {
             "采用本地默认值；远程配置仍受本地开关和速率限制约束。"
-        } else if source == "remote_override" {
-            "本地缺省值；有效参数还可能由服务端下发的运行配置决定。"
         } else if prefix.ends_with("directory") || prefix.ends_with("path") {
             "采用内置路径；请按文件或 Docker 部署检查路径及挂载，修改后重启。"
         } else {
             "采用内置默认值；如需调整，请修改启动配置并重启。"
         };
-        let rendered = value.to_string();
+        let default_value = (!value.is_null()).then(|| {
+            let rendered = value.to_string();
+            if rendered.chars().count() > 480 {
+                "内置规则（详情见对应运行时设置）".into()
+            } else {
+                rendered
+            }
+        });
         self.items.push(ConfigIssue {
             field: prefix.into(),
             kind: if optional {
@@ -104,11 +119,7 @@ impl ConfigCheck {
                 ConfigIssueKind::Default
             },
             source: source.into(),
-            default_value: Some(if rendered.chars().count() > 480 {
-                "内置规则（详情见对应运行时设置）".into()
-            } else {
-                rendered
-            }),
+            default_value,
             description: description.into(),
         });
     }
@@ -217,6 +228,14 @@ pub(crate) fn inspect_scanner(raw: &Value) -> Result<ConfigCheck, serde_json::Er
         ],
         "scanner",
     );
+    report
+        .items
+        .retain(|item| PUBLIC_CONFIG_FIELDS.contains(&item.field.as_str()));
+    report.public_fields = PUBLIC_CONFIG_FIELDS
+        .iter()
+        .filter(|field| !sensitive(field))
+        .map(|field| (*field).into())
+        .collect();
     for issue in &mut report.items {
         if issue.field == "scanner.verify_tls" {
             issue.description = "缺省值关闭 TLS 证书校验；文件及 Docker 部署均建议显式设置 verify_tls = true 并配置可信 CA。".into();
@@ -230,6 +249,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unset_local_defaults_are_reported_without_leaking_identity_or_remote_fields() {
+        let report = ConfigCheck::inspect(
+            &json!({"nuclei": {"enabled": true}}),
+            &json!({"nuclei": {"enabled": false, "path": null, "rate_limit": null},
+                "scanner": {"runtime_token": null, "scanner_id": null}}),
+            &[],
+            "scanner",
+        );
+        assert_eq!(report.items.len(), 1);
+        assert_eq!(report.items[0].field, "nuclei.path");
+        assert_eq!(report.items[0].kind, ConfigIssueKind::Default);
+        assert!(report.items[0].default_value.is_none());
+        assert_eq!(report.error_count(), 0);
+    }
+
+    #[test]
+    fn unpublished_defaults_never_generate_notices() {
+        let report = inspect_scanner(&json!({})).unwrap();
+        assert!(
+            report
+                .items
+                .iter()
+                .all(|item| PUBLIC_CONFIG_FIELDS.contains(&item.field.as_str()))
+        );
+        for field in [
+            "scanner.heartbeat_interval_seconds",
+            "scanner.masscan_output_mode",
+            "scanner.masscan_wait_seconds",
+            "scanner.masscan_max_runtime_seconds",
+        ] {
+            assert!(!report.items.iter().any(|item| item.field == field));
+        }
+    }
+
+    #[test]
+    fn tracked_public_configuration_has_no_notices() {
+        if option_env!("NM_PUBLIC_CONFIG_FIELDS_FILE").is_some() {
+            return;
+        }
+        let content =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config.toml")).unwrap();
+        let raw: Value = toml_edit::de::from_str(&content).unwrap();
+        assert!(inspect_scanner(&raw).unwrap().items.is_empty());
+    }
+
+    #[test]
     fn omitted_fields_use_real_defaults_and_do_not_expose_identity() {
         let raw = json!({"scanner":{"c_server":"private.internal", "c_port":9999,
             "rate":1000, "runtime_token":"private-token"}, "upload":{"endpoint":"https://private.internal/result"}});
@@ -238,9 +303,9 @@ mod tests {
         let field = report
             .items
             .iter()
-            .find(|item| item.field == "scanner.masscan_wait_seconds")
+            .find(|item| item.field == "scanner.connect_timeout_seconds")
             .unwrap();
-        assert_eq!(field.default_value.as_deref(), Some("10"));
+        assert_eq!(field.default_value.as_deref(), Some("5"));
         let output = serde_json::to_string(&report).unwrap();
         assert!(!output.contains("private-token"));
         assert!(!output.contains("private.internal"));
@@ -248,17 +313,49 @@ mod tests {
     }
 
     #[test]
-    fn inactive_engines_are_optional_but_missing_connection_is_required() {
+    fn inactive_engine_paths_are_optional_but_missing_connection_is_required() {
         let report = inspect_scanner(&json!({"service_detection":{"enabled":false}})).unwrap();
         assert_eq!(report.error_count(), 4);
         assert!(
             report
                 .items
                 .iter()
-                .any(|item| item.field == "service_detection.batch_endpoints"
+                .any(|item| item.field == "service_detection.zgrab_path"
                     && item.kind == ConfigIssueKind::Optional
-                    && item.source == "remote_override")
+                    && item.source == "startup")
         );
+    }
+
+    #[test]
+    fn remote_runtime_fields_are_excluded_but_local_limits_and_paths_remain() {
+        let report = inspect_scanner(&json!({})).unwrap();
+        assert!(
+            !report
+                .items
+                .iter()
+                .any(|item| item.source == "remote_override")
+        );
+        for field in [
+            "service_detection.batch_endpoints",
+            "service_detection.strategy",
+            "dns.record_types",
+            "dns.query_timeout_seconds",
+            "nuclei.rate_limit",
+            "nuclei.max_findings",
+        ] {
+            assert!(!report.items.iter().any(|item| item.field == field));
+        }
+        for field in [
+            "service_detection.enabled",
+            "service_detection.zgrab_path",
+            "dns.enabled",
+            "nuclei.enabled",
+            "nuclei.path",
+            "nuclei.templates_path",
+            "scanner.connect_timeout_seconds",
+        ] {
+            assert!(report.items.iter().any(|item| item.field == field));
+        }
     }
 
     #[test]
@@ -300,7 +397,15 @@ mod deployment_tests {
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
         let loaded = crate::config::load(path.to_str().unwrap()).unwrap();
         assert_eq!(loaded.app.scanner.masscan.wait_seconds, 10);
+        assert!(
+            !loaded
+                .check
+                .items
+                .iter()
+                .any(|item| item.field.starts_with("scanner.masscan_"))
+        );
         assert_eq!(loaded.app.scanner.connect_timeout_seconds, 5);
+        assert_eq!(loaded.app.service_detection.connect_timeout_seconds, 5);
         assert!(
             loaded
                 .check
@@ -309,7 +414,7 @@ mod deployment_tests {
                 .any(|item| item.field == "scanner.connect_timeout_seconds")
         );
         assert!(
-            loaded
+            !loaded
                 .check
                 .items
                 .iter()
