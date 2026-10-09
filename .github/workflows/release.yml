@@ -74,6 +74,9 @@ jobs:
             export CC=musl-gcc
             export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+            # Debian's musl-gcc wrapper does not support Rust's default static PIE.
+            # Use a static executable so the wrapper cannot add an interpreter.
+            export RUSTFLAGS='-C target-feature=+crt-static -C relocation-model=static'
           fi
           cargo build --locked --release --target "$BUILD_TARGET"
 
@@ -110,6 +113,7 @@ jobs:
             echo 'musl binary depends on shared libraries' >&2
             exit 1
           fi
+          "$binary" --version
 
       - name: Resolve package metadata
         id: package

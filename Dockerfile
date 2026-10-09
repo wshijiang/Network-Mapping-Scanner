@@ -3,6 +3,7 @@
 FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS rust-builder
 WORKDIR /build
 ENV CARGO_BUILD_JOBS=2
+RUN rustup component add rustfmt clippy
 RUN apt-get update && apt-get install -y --no-install-recommends cmake libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && printf 'fn main() {}\n' > src/main.rs && cargo fetch --locked
@@ -13,7 +14,9 @@ RUN sed -i '/^masscan_output_mode =/d; /^masscan_wait_seconds =/d; /^masscan_max
 
 # Keep dependency downloads in cached build layers. Cache mounts alone are not
 # persisted by cache-to=gha; correctness never depends on a warm cache.
-RUN cargo fmt --check && cargo clippy --locked --all-targets && cargo test --locked -- --test-threads=4
+RUN cargo fmt --check
+RUN cargo clippy --locked --all-targets
+RUN cargo test --locked -- --test-threads=4
 RUN cargo build --locked --release && mkdir /out && install -m 0755 target/release/scanner-rs /out/scanner-rs
 
 FROM golang:1.26.8-bookworm@sha256:dc9ad6c05acc7a88e5b71bde60a5fe3bd4b9f0db209011711b464107438a8107 AS tools-builder
