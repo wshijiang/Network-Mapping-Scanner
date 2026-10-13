@@ -1,6 +1,14 @@
 dns.enabled
 dns.query_timeout_seconds
 dns.record_types
+modules.auto_rollback
+modules.cancel_grace_seconds
+modules.directory
+modules.enabled
+modules.stage_timeout_seconds
+modules.state_database
+modules.trusted_keys
+modules.worker_path
 network.ipv4_enabled
 network.ipv4_probe_url
 network.ipv6_enabled

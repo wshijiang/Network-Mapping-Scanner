@@ -256,6 +256,7 @@ async fn module_stage(
             .engine_path
             .as_ref()
             .map_or_else(String::new, |p| p.to_string_lossy().into_owned()),
+        masscan: config.masscan.clone(),
         service: config.service_detection.clone(),
         dns: config.dns.clone(),
         nuclei: config.nuclei.clone(),
@@ -372,7 +373,7 @@ async fn run_ports(
     cancel: &AtomicBool,
 ) -> Result<masscan::EngineOutcome, ScannerError> {
     if config.environment.is_none() {
-        return masscan::run(config.scanner_path, target, cancel).await;
+        return masscan::run(config.scanner_path, config.masscan, target, cancel).await;
     }
     let result = module_stage(
         config,

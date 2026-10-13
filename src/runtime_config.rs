@@ -1,7 +1,8 @@
 use crate::error::{ScannerError, ServerError};
 use crate::http_client::{ServerHttpClient, response_decode_error, response_error};
 use crate::types::{
-    AppConfig, DnsConfig, NucleiConfig, ServiceDetectionConfig, ServiceDetectionStrategy,
+    AppConfig, DnsConfig, MasscanConfig, NucleiConfig, ServiceDetectionConfig,
+    ServiceDetectionStrategy,
 };
 use crate::types::{default_batch_endpoints, default_idle_timeout, default_service_runtime};
 use serde::{Deserialize, Serialize};
@@ -71,9 +72,15 @@ pub(crate) struct RemoteNucleiConfig {
     pub(crate) max_result_bytes: usize,
 }
 
+fn default_masscan(config: &MasscanConfig) -> bool {
+    *config == MasscanConfig::default()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RuntimeSnapshot {
     pub(crate) revision: i64,
+    #[serde(default, skip_serializing_if = "default_masscan")]
+    pub(crate) masscan: MasscanConfig,
     pub(crate) rate: i32,
     pub(crate) service_detection: ServiceDetectionConfig,
     pub(crate) dns: DnsConfig,
@@ -100,6 +107,7 @@ struct State {
 #[derive(Clone)]
 pub(crate) struct RuntimeConfiguration {
     state: Arc<RwLock<State>>,
+    local_masscan: MasscanConfig,
     local_rate_limit: i32,
     local_service_enabled: bool,
     local_dns_enabled: bool,
@@ -115,6 +123,7 @@ impl RuntimeConfiguration {
             state: Arc::new(RwLock::new(State {
                 current: RuntimeSnapshot {
                     revision: 0,
+                    masscan: local.scanner.masscan.clone(),
                     rate: local.scanner.rate as i32,
                     service_detection: local.service_detection.clone(),
                     dns: local.dns.clone(),
@@ -124,6 +133,7 @@ impl RuntimeConfiguration {
                 status: "local",
                 error: None,
             })),
+            local_masscan: local.scanner.masscan.clone(),
             local_rate_limit: local.scanner.rate as i32,
             local_service_enabled: local.service_detection.enabled,
             local_dns_enabled: local.dns.enabled,
@@ -240,6 +250,7 @@ impl RuntimeConfiguration {
         nuclei.max_result_bytes = remote.nuclei.max_result_bytes;
         Ok(RuntimeSnapshot {
             revision: envelope.revision,
+            masscan: self.local_masscan.clone(),
             rate: remote.masscan.rate.min(self.local_rate_limit),
             service_detection: service,
             dns,
@@ -332,6 +343,19 @@ pub(crate) async fn fetch_configuration(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn legacy_task_snapshot_defaults_masscan_without_changing_serialization() {
+        let mut local: super::AppConfig =
+            toml_edit::de::from_str(include_str!("../config.toml")).unwrap();
+        local.scanner.masscan = Default::default();
+        let snapshot = super::RuntimeConfiguration::new(&local).snapshot().await;
+        let original = serde_json::to_value(snapshot).unwrap();
+        assert!(original.get("masscan").is_none());
+        let restored: super::RuntimeSnapshot = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(restored.masscan, Default::default());
+        assert_eq!(serde_json::to_value(restored).unwrap(), original);
+    }
+
     #[test]
     fn legacy_remote_configuration_uses_bounded_service_defaults() {
         let value = serde_json::json!({"enabled":true,"strategy":"standard","max_probes_per_endpoint":8,

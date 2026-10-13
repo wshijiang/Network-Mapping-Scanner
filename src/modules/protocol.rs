@@ -2,7 +2,9 @@ use crate::{
     error::ScannerError,
     journal::Checkpoint,
     scan::{ScanObservation, plan::ScanStageKind},
-    types::{DnsConfig, DnsResolver, NucleiConfig, ServiceDetectionConfig, TargetParams},
+    types::{
+        DnsConfig, DnsResolver, MasscanConfig, NucleiConfig, ServiceDetectionConfig, TargetParams,
+    },
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::io::{Read, Write};
@@ -19,6 +21,8 @@ pub(crate) struct Request {
     pub(crate) stage: ScanStageKind,
     pub(crate) target: TargetParams,
     pub(crate) engine_path: String,
+    #[serde(default)]
+    pub(crate) masscan: MasscanConfig,
     pub(crate) service: ServiceDetectionConfig,
     pub(crate) dns: DnsConfig,
     pub(crate) nuclei: NucleiConfig,

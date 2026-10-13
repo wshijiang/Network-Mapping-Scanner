@@ -268,7 +268,14 @@ async fn execute(
     let complete = |results| (Outcome::Completed, results, None);
     Ok(match request.stage {
         ScanStageKind::PortDiscovery => {
-            match masscan::run(&request.engine_path, &request.target, cancel).await? {
+            match masscan::run(
+                &request.engine_path,
+                &request.masscan,
+                &request.target,
+                cancel,
+            )
+            .await?
+            {
                 masscan::EngineOutcome::Completed(p) => {
                     complete(p.into_iter().map(ScanObservation::Port).collect())
                 }

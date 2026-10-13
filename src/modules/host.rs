@@ -258,6 +258,7 @@ mod tests {
                 address_family: "ipv4".into(),
             },
             engine_path: String::new(),
+            masscan: local.scanner.masscan,
             service: local.service_detection,
             dns: local.dns,
             nuclei: local.nuclei,

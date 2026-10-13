@@ -10,3 +10,5 @@
 !docker/config.example.toml
 !docker/THIRD_PARTY.md
 !LICENSE
+!tests/
+!tests/**

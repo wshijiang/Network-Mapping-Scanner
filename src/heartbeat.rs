@@ -198,6 +198,8 @@ impl ActiveTask {
 #[derive(Serialize)]
 struct HeartbeatPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
+    local_config_check: Option<crate::config_check::ConfigCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     module_state: Option<serde_json::Value>,
     diagnostics: crate::diagnostics::protocol::Capabilities,
     diagnostic_health: serde_json::Value,
@@ -275,6 +277,7 @@ struct HeartbeatLease {
 
 #[derive(Clone)]
 pub(crate) struct HeartbeatClient {
+    local_config_check: Option<crate::config_check::ConfigCheck>,
     modules: Option<crate::modules::registry::Registry>,
     diagnostics: Option<crate::diagnostics::DiagnosticsHandle>,
     client: ServerHttpClient,
@@ -332,6 +335,7 @@ impl HeartbeatClient {
         runtime_configuration: RuntimeConfiguration,
     ) -> Self {
         Self {
+            local_config_check: None,
             modules: None,
             diagnostics: None,
             client,
@@ -406,6 +410,7 @@ impl HeartbeatClient {
             self.scan_capabilities.clone()
         };
         let payload = HeartbeatPayload {
+            local_config_check: self.local_config_check.clone(),
             module_state: self.modules.as_ref().map(|registry| {
                 let mut report = registry.report();
                 report["task_generation"] =

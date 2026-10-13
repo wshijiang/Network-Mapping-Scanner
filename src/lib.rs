@@ -1,5 +1,6 @@
 mod cache;
 mod config;
+mod config_check;
 mod diagnostics;
 mod error;
 mod health;
@@ -554,6 +555,7 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
         cfg.scanner.runtime_configuration_url(),
         runtime_configuration.clone(),
     )
+    .with_config_check(loaded.check.clone())
     .with_diagnostics(diagnostics_runtime.handle.clone())
     .with_modules(module_registry.clone());
     let active_task = ActiveTask::default();
@@ -2018,7 +2020,7 @@ async fn scan_loop(
             .clone()
             .unwrap_or_else(|| ScanPlan::legacy(&runtime.service_detection));
 
-        let scan_key = if let Some(environment) = &pinned {
+        let mut scan_key = if let Some(environment) = &pinned {
             let bytes = serde_json::to_vec(&(
                 assigned_task.task_id,
                 &target,
@@ -2048,6 +2050,9 @@ async fn scan_loop(
                 assigned_task.dns_resolvers
             )
         };
+        if pinned.is_none() && runtime.masscan != Default::default() {
+            scan_key.push_str(&format!("|{:?}", runtime.masscan));
+        }
         let journal = match cache
             .store
             .as_ref()
@@ -2138,6 +2143,7 @@ async fn scan_loop(
                 registry: config.module_registry.as_ref(),
                 journal,
                 scanner_path: config.scanner_path,
+                masscan: &runtime.masscan,
                 service_detection: &runtime.service_detection,
                 dns: &runtime.dns,
                 nuclei: &runtime.nuclei,

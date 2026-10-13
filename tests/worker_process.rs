@@ -116,6 +116,22 @@ fn real_worker_runs_port_engine_and_keeps_protocol_stdout_clean() {
 }
 
 #[test]
+fn port_worker_applies_nondefault_masscan_settings() {
+    let mut worker = Worker::start(
+        "port_discovery",
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\nprintf 'open tcp 22 192.0.2.1 1\\n'\n",
+    );
+    let mut request = worker.request("port_discovery");
+    request["masscan"] = json!({"masscan_output_mode":"standard_list","masscan_wait_seconds":42,"masscan_max_runtime_seconds":60});
+    let id = request["id"].clone();
+    worker.send(json!({"type":"execute","request":request}));
+    worker.send(json!({"type":"input_end","id":id}));
+    assert_eq!(worker.finish().last().unwrap()["outcome"], "completed");
+    let args = fs::read_to_string(worker.root.join("engine.args")).unwrap();
+    assert!(args.contains("--wait\n42\n"), "{args}");
+}
+
+#[test]
 fn service_worker_waits_for_checkpoint_ack_before_next_block() {
     let engine = "#!/bin/sh\nwhile IFS=',' read -r ip domain tag port; do\n printf '{\"ip\":\"%s\",\"data\":{\"%s\":{\"status\":\"success\",\"protocol\":\"%s\",\"port\":%s,\"result\":{\"banner\":\"identified\"}}}}\\n' \"$ip\" \"$tag\" \"$tag\" \"$port\"\ndone\n";
     let mut worker = Worker::start("service_detection", engine);

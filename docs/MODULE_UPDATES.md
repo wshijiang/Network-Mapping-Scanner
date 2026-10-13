@@ -148,3 +148,24 @@ cargo build --locked --release --bins
 ```
 
 测试使用固定假引擎与临时 SQLite。新增检查涵盖签名、路径与帧限制、任务绑定跨配置/发布/重启、回滚、GC、真实 Worker 管道、分块 ACK 和运行中取消，无需扫描真实目标。
+
+## 与主分支配置检查和 Masscan 参数的整合
+
+共享库声明配置检查模块，Agent 将启动时的配置检查快照附带到心跳的
+`local_config_check` 字段。公开配置字段清单由
+`python3 scripts/update-config-fields.py` 更新，必须与配置模板一起维护。
+
+原生扫描和 Worker 均使用任务运行快照中的 Masscan 输出模式、等待时间和
+最长运行时间。模块任务的持久化 pin 同时保存这些参数；重启和后续配置变化
+不会改变既有任务。旧快照缺少该字段时使用默认参数，默认参数不增加快照
+序列化字段，保持旧任务的指纹。非模块任务仅在非默认参数时扩展缓存键。
+Worker 请求缺少 Masscan 配置时仍使用默认值；使用非默认参数时应部署本次
+更新后的 Worker。
+
+Docker 构建上下文包含真实进程集成测试，并构建和安装 `scanner-rs`、
+`scanner-worker`、`scanner-package` 三个程序。Worker 位于 Agent 同目录，
+可由默认的相邻程序查找逻辑定位。
+
+本次本地验证：全目标编译、格式检查、严格 Clippy、164 项 Rust 测试、
+28 项 Docker 发布契约测试及 Cargo Chef 0.1.78 的规划/虚拟工程生成均通过。
+完整多架构 Docker 镜像构建由 GitHub Actions 验证。

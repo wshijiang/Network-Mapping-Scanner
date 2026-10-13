@@ -9,6 +9,7 @@ RUN cargo install --locked --version 0.1.78 cargo-chef
 FROM rust-chef AS rust-planner
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY tests ./tests
 COPY build.rs ./
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -18,12 +19,13 @@ COPY --from=rust-planner /build/recipe.json ./recipe.json
 # Match each validation/build command so both test and release dependencies are warm.
 RUN cargo chef cook --locked --clippy --all-targets --recipe-path recipe.json
 RUN cargo chef cook --locked --all-targets --recipe-path recipe.json
-RUN cargo chef cook --locked --release --recipe-path recipe.json
+RUN cargo chef cook --locked --release --bins --recipe-path recipe.json
 
 FROM rust-dependencies AS rust-builder
 # Restore the real manifests and build script after cargo-chef's dummy project.
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY tests ./tests
 COPY build.rs ./
 ENV NM_PUBLIC_CONFIG_FIELDS_FILE=src/public_config_fields.txt
 COPY docker/config.example.toml ./config.toml
@@ -34,8 +36,8 @@ RUN sed -i '/^masscan_output_mode =/d; /^masscan_wait_seconds =/d; /^masscan_max
 # Always validate the real sources; correctness never depends on a warm cache.
 RUN cargo fmt --check
 RUN cargo clippy --locked --all-targets
-RUN cargo test --locked
-RUN cargo build --locked --release && mkdir /out && install -m 0755 target/release/scanner-rs /out/scanner-rs
+RUN cargo test --locked --all-targets
+RUN cargo build --locked --release --bins && mkdir /out && install -m 0755 target/release/scanner-rs target/release/scanner-worker target/release/scanner-package /out/
 
 FROM golang:1.26.8-bookworm@sha256:dc9ad6c05acc7a88e5b71bde60a5fe3bd4b9f0db209011711b464107438a8107 AS tools-builder
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local
@@ -61,7 +63,7 @@ FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libpcap0.8 && rm -rf /var/lib/apt/lists/* \
     && install -d -m 0700 /var/lib/network-mapping-scanner /var/log/network-mapping-scanner /root/.config/zgrab2
 WORKDIR /opt/network-mapping-scanner
-COPY --from=rust-builder /out/scanner-rs /usr/local/bin/scanner-rs
+COPY --from=rust-builder /out/scanner-rs /out/scanner-worker /out/scanner-package /usr/local/bin/
 COPY --from=tools-builder /out/masscan /out/zgrab2 /out/nuclei /usr/local/bin/
 COPY --from=tools-builder /out/zgrab2-blocklist.conf /root/.config/zgrab2/blocklist.conf
 COPY --from=tools-builder /out/licenses ./licenses

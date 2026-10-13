@@ -889,6 +889,7 @@ mod tests {
         assert_eq!(second.generation, 2);
         let mut changed = runtime.clone();
         changed.rate = 1;
+        changed.masscan.wait_seconds = 42;
         assert_eq!(
             registry.bind(&task, changed.clone()).unwrap().runtime.rate,
             runtime.rate
@@ -896,6 +897,15 @@ mod tests {
         let fresh = registry.bind(&f.task(), changed.clone()).unwrap();
         assert_eq!(fresh.environment.generation, 2);
         assert_eq!(fresh.runtime.rate, 1);
+        assert_eq!(fresh.runtime.masscan.wait_seconds, 42);
+        assert_eq!(
+            registry
+                .bind(&task, changed.clone())
+                .unwrap()
+                .runtime
+                .masscan,
+            runtime.masscan
+        );
         drop(registry);
         let reopened = Registry::open(f.local.modules.clone(), &f.local, "origin".into())
             .await
@@ -907,6 +917,14 @@ mod tests {
                 .environment
                 .generation,
             1
+        );
+        assert_eq!(
+            reopened
+                .bind(&task, runtime.clone())
+                .unwrap()
+                .runtime
+                .masscan,
+            runtime.masscan
         );
         let mut changed_task = task;
         changed_task.task_port = "443".into();
