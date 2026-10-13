@@ -14,3 +14,6 @@ pub(crate) use observation::{
 };
 pub(crate) use orchestrator::{ScanOutcome, ScanRuntimeConfig, run_scan};
 pub(crate) use plan::{ScanCapabilities, ScanPlan};
+
+#[cfg(test)]
+pub(crate) use orchestrator::process_worker_result;

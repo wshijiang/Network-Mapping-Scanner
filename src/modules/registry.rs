@@ -990,4 +990,98 @@ mod tests {
             .unwrap();
         assert_eq!(registry.automatic_rollback_target().unwrap(), None);
     }
+
+    #[tokio::test]
+    async fn completed_wrong_stage_results_trigger_rollback_instead_of_resetting_health() {
+        use crate::modules::{host::StageResult, protocol::Outcome};
+        let f = Fixture::new();
+        let registry = Registry::open(f.local.modules.clone(), &f.local, "origin".into())
+            .await
+            .unwrap();
+        let previous = registry.active().unwrap().unwrap();
+        registry.apply(&f.bundle(2)).await.unwrap();
+        let wrong: crate::scan::ScanObservation = serde_json::from_value(serde_json::json!({"kind":"service","ip":"192.0.2.1","port":22,"protocol":"tcp","service":"ssh","source":"test","observed_at":1})).unwrap();
+        for attempt in 1..=3 {
+            let result = crate::scan::process_worker_result(
+                ScanStageKind::PortDiscovery,
+                Ok(StageResult {
+                    outcome: Outcome::Completed,
+                    observations: vec![wrong.clone()],
+                    error: None,
+                }),
+                Some(&registry),
+                2,
+                false,
+            );
+            assert!(
+                matches!(result, Err(ScannerError::Scan(ref message)) if message.contains("observation kind rejected"))
+            );
+            assert_eq!(
+                registry.automatic_rollback_target().unwrap(),
+                if attempt == 3 { Some(1) } else { None }
+            );
+        }
+        let restored = registry
+            .rollback(registry.automatic_rollback_target().unwrap().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(restored.generation, 3);
+        assert_eq!(restored.modules, previous.modules);
+    }
+
+    #[tokio::test]
+    async fn valid_success_resets_health_but_partial_and_cancelled_work_do_not() {
+        use crate::modules::{host::StageResult, protocol::Outcome};
+        let f = Fixture::new();
+        let registry = Registry::open(f.local.modules.clone(), &f.local, "origin".into())
+            .await
+            .unwrap();
+        registry.apply(&f.bundle(2)).await.unwrap();
+        for _ in 0..2 {
+            registry.observe_worker(2, "port_discovery", true).unwrap();
+        }
+        let port: crate::scan::ScanObservation = serde_json::from_value(serde_json::json!({"kind":"port","ip":"192.0.2.1","port":22,"protocol":"tcp","state":"open","source":"test","observed_at":1})).unwrap();
+        crate::scan::process_worker_result(
+            ScanStageKind::PortDiscovery,
+            Ok(StageResult {
+                outcome: Outcome::Completed,
+                observations: vec![port],
+                error: None,
+            }),
+            Some(&registry),
+            2,
+            false,
+        )
+        .unwrap();
+        registry.observe_worker(2, "port_discovery", true).unwrap();
+        assert_eq!(registry.automatic_rollback_target().unwrap(), None);
+        // Structurally valid partial and business failures must preserve counts.
+        for outcome in [Outcome::Partial, Outcome::Failed, Outcome::Cancelled] {
+            crate::scan::process_worker_result(
+                ScanStageKind::PortDiscovery,
+                Ok(StageResult {
+                    outcome,
+                    observations: Vec::new(),
+                    error: None,
+                }),
+                Some(&registry),
+                2,
+                false,
+            )
+            .unwrap();
+        }
+        crate::scan::process_worker_result(
+            ScanStageKind::PortDiscovery,
+            Err(ScannerError::Scan("worker frame rejected".into())),
+            Some(&registry),
+            2,
+            true,
+        )
+        .err()
+        .unwrap();
+        registry.observe_worker(2, "port_discovery", true).unwrap();
+        assert_eq!(registry.automatic_rollback_target().unwrap(), None);
+        registry.observe_worker(2, "port_discovery", true).unwrap();
+        assert_eq!(registry.automatic_rollback_target().unwrap(), Some(1));
+    }
 }

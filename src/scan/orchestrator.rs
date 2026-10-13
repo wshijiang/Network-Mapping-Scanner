@@ -283,9 +283,47 @@ async fn module_stage(
         std::time::Duration::from_secs(settings.cancel_grace_seconds),
     )
     .await;
-    if !cancel.load(std::sync::atomic::Ordering::Relaxed)
-        && let Some(registry) = config.registry
-    {
+    process_worker_result(
+        stage,
+        result,
+        config.registry,
+        environment.generation,
+        cancel.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// Validate the entire result before a Completed outcome can reset health.
+/// A well-formed observation for another stage is a worker protocol failure.
+pub(crate) fn process_worker_result(
+    stage: ScanStageKind,
+    result: Result<crate::modules::host::StageResult, ScannerError>,
+    registry: Option<&crate::modules::registry::Registry>,
+    generation: i64,
+    cancelled: bool,
+) -> Result<crate::modules::host::StageResult, ScannerError> {
+    let result = result.and_then(|result| {
+        let valid = result.observations.iter().all(|observation| {
+            matches!(
+                (stage, observation),
+                (ScanStageKind::PortDiscovery, ScanObservation::Port(_))
+                    | (ScanStageKind::ServiceDetection, ScanObservation::Service(_))
+                    | (ScanStageKind::DnsLookup, ScanObservation::Dns(_))
+                    | (
+                        ScanStageKind::VulnerabilityDetection,
+                        ScanObservation::Vulnerability(_)
+                    )
+            )
+        });
+        if valid {
+            Ok(result)
+        } else {
+            Err(ScannerError::Scan(format!(
+                "worker observation kind rejected for {}",
+                stage.name()
+            )))
+        }
+    });
+    if !cancelled && let Some(registry) = registry {
         let unsafe_failure = match &result {
             Err(ScannerError::Io(error)) => matches!(
                 error.kind(),
@@ -309,7 +347,7 @@ async fn module_stage(
                 .as_ref()
                 .is_ok_and(|r| r.outcome == crate::modules::protocol::Outcome::Completed)
         {
-            registry.observe_worker(environment.generation, stage.name(), unsafe_failure)?;
+            registry.observe_worker(generation, stage.name(), unsafe_failure)?;
         }
     }
     result
@@ -541,6 +579,88 @@ fn dns_port_targets(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn worker_results_validate_every_observation_kind_before_success() {
+        use super::*;
+        use crate::modules::{host::StageResult, protocol::Outcome};
+        let observations: Vec<ScanObservation> = vec![
+            serde_json::json!({"kind":"port","ip":"192.0.2.1","port":22,"protocol":"tcp","state":"open","source":"test","observed_at":1}),
+            serde_json::json!({"kind":"service","ip":"192.0.2.1","port":22,"protocol":"tcp","service":"ssh","source":"test","observed_at":1}),
+            serde_json::json!({"kind":"dns","question":{"name":"example.com","type":"A"},"response_code":"NOERROR","observed_at":1}),
+            serde_json::json!({"kind":"vulnerability","ip":"192.0.2.1","port":22,"protocol":"tcp","template_id":"test","name":"test","severity":"low","matched_at":"192.0.2.1:22","source":"test","observed_at":1}),
+        ].into_iter().map(|value| serde_json::from_value(value).unwrap()).collect();
+        let stages = [
+            ScanStageKind::PortDiscovery,
+            ScanStageKind::ServiceDetection,
+            ScanStageKind::DnsLookup,
+            ScanStageKind::VulnerabilityDetection,
+        ];
+        for (index, stage) in stages.into_iter().enumerate() {
+            for (observation_index, observation) in observations.iter().enumerate() {
+                let result = process_worker_result(
+                    stage,
+                    Ok(StageResult {
+                        outcome: Outcome::Completed,
+                        observations: vec![observation.clone()],
+                        error: None,
+                    }),
+                    None,
+                    1,
+                    false,
+                );
+                assert_eq!(
+                    result.is_ok(),
+                    index == observation_index,
+                    "{} returned variant {observation_index}",
+                    stage.name()
+                );
+            }
+            assert!(
+                process_worker_result(
+                    stage,
+                    Ok(StageResult {
+                        outcome: Outcome::Completed,
+                        observations: Vec::new(),
+                        error: None
+                    }),
+                    None,
+                    1,
+                    false
+                )
+                .is_ok()
+            );
+        }
+        // A valid first item must not hide a later wrong-stage observation.
+        assert!(
+            process_worker_result(
+                ScanStageKind::PortDiscovery,
+                Ok(StageResult {
+                    outcome: Outcome::Completed,
+                    observations: observations[..2].to_vec(),
+                    error: None
+                }),
+                None,
+                1,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            process_worker_result(
+                ScanStageKind::ServiceDetection,
+                Ok(StageResult {
+                    outcome: Outcome::Partial,
+                    observations: vec![observations[0].clone()],
+                    error: Some("incomplete".into())
+                }),
+                None,
+                1,
+                false
+            )
+            .is_err()
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn recovery_reuses_ports_and_completed_service_blocks() {
