@@ -2,7 +2,6 @@
 
 FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS rust-builder
 WORKDIR /build
-ENV CARGO_BUILD_JOBS=2
 RUN rustup component add rustfmt clippy
 RUN apt-get update && apt-get install -y --no-install-recommends cmake libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
@@ -19,7 +18,7 @@ RUN sed -i '/^masscan_output_mode =/d; /^masscan_wait_seconds =/d; /^masscan_max
 # persisted by cache-to=gha; correctness never depends on a warm cache.
 RUN cargo fmt --check
 RUN cargo clippy --locked --all-targets
-RUN cargo test --locked -- --test-threads=4
+RUN cargo test --locked
 RUN cargo build --locked --release && mkdir /out && install -m 0755 target/release/scanner-rs /out/scanner-rs
 
 FROM golang:1.26.8-bookworm@sha256:dc9ad6c05acc7a88e5b71bde60a5fe3bd4b9f0db209011711b464107438a8107 AS tools-builder
@@ -29,7 +28,7 @@ WORKDIR /tools
 # All upstream tools are unmodified and fixed to reviewed commits.
 RUN git init masscan && git -C masscan remote add origin https://github.com/robertdavidgraham/masscan.git \
     && git -C masscan fetch --depth=1 origin 06902c40d1494881c17b7968ef530e1d6bbd320c \
-    && git -C masscan checkout --detach FETCH_HEAD && make -C masscan -j2 \
+    && git -C masscan checkout --detach FETCH_HEAD && make -C masscan \
     && mkdir -p /out/licenses/masscan && cp masscan/bin/masscan /out/masscan && cp masscan/LICENSE /out/licenses/masscan/
 RUN git init zgrab2 && git -C zgrab2 remote add origin https://github.com/zmap/zgrab2.git \
     && git -C zgrab2 fetch --depth=1 origin ea734bcf60ef2921684cb522dfb87a07a322afa6 \
