@@ -11,6 +11,7 @@ COPY src ./src
 COPY build.rs ./
 ENV NM_PUBLIC_CONFIG_FIELDS_FILE=src/public_config_fields.txt
 COPY docker/config.example.toml ./config.toml
+COPY docker/config.example.toml ./docker/config.example.toml
 RUN sed -i '/^masscan_output_mode =/d; /^masscan_wait_seconds =/d; /^masscan_max_runtime_seconds =/d' config.toml
 
 
