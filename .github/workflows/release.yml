@@ -2,6 +2,13 @@ name: Build release
 
 on:
   push:
+    # Main builds only warm the Cargo cache; packaging and publishing require a release run.
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - build.rs
+      - .github/workflows/release.yml
     tags:
       - 'v*'
   workflow_dispatch:
@@ -67,17 +74,28 @@ jobs:
       - name: Install Rust target
         run: rustup target add "$BUILD_TARGET"
 
-      - name: Build scanner
+      - name: Configure Cargo build
         run: |
           set -euo pipefail
           if [[ "$BUILD_TARGET" == *-musl ]]; then
-            export CC=musl-gcc
-            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+            echo 'CC=musl-gcc' >> "$GITHUB_ENV"
+            echo 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
+            echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
             # Debian's musl-gcc wrapper does not support Rust's default static PIE.
             # Use a static executable so the wrapper cannot add an interpreter.
-            export RUSTFLAGS='-C target-feature=+crt-static -C relocation-model=static'
+            echo 'RUSTFLAGS=-C target-feature=+crt-static -C relocation-model=static' >> "$GITHUB_ENV"
           fi
+
+      - name: Restore Cargo dependencies and build artifacts
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          shared-key: scanner-release-${{ matrix.target }}
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build scanner
+        run: |
+          set -euo pipefail
           cargo build --locked --release --target "$BUILD_TARGET"
 
       - name: Verify Debian 12 GLIBC compatibility
@@ -116,6 +134,7 @@ jobs:
           "$binary" --version
 
       - name: Resolve package metadata
+        if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')
         id: package
         run: |
           set -euo pipefail
@@ -134,6 +153,7 @@ jobs:
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Assemble release archive
+        if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')
         env:
           ARCHIVE_NAME: ${{ steps.package.outputs.archive }}
         run: |
@@ -173,6 +193,7 @@ jobs:
           fi
 
       - name: Upload build artifact
+        if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.archive }}
@@ -182,7 +203,7 @@ jobs:
 
   publish-release:
     name: Publish all Linux release archives
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: build-release
     runs-on: ubuntu-24.04
     permissions:
