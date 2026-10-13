@@ -164,3 +164,16 @@ actionlint .github/workflows/docker.yml .github/workflows/release.yml
 [GHA 缓存](https://docs.docker.com/build/cache/backends/gha/)、
 [GHCR 发布](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)、
 [Environment 门禁](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)。
+
+
+### CI 构建磁盘占用
+
+扫描镜像同时编译 Rust 三个程序、zgrab2 和 Nuclei。Docker 层会保留每个
+RUN 结束时的文件，Go 模块与编译缓存留在前一个层后，即使后续删除也不能
+回收该层空间。本构建在各工具的编译 RUN 内复制二进制、许可证和 blocklist
+后立即清理 Go 缓存和源码。Rust CI 关闭 dev/test 调试符号与增量编译，仍执行
+全部检查和测试，release 优化配置保持原样。
+
+两个一次性 GitHub runner 在构建前清理未使用的预装 SDK 和 Docker 缓存；
+OCI 与 GHA 缓存导出完成后、导入镜像进行 smoke test 前清理 Buildx 快照。
+工作流在这些节点输出磁盘容量。清理不涉及发布产物、节点数据库或生产主机。

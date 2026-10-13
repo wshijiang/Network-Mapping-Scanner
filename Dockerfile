@@ -2,6 +2,8 @@
 
 FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS rust-chef
 WORKDIR /build
+# CI needs runnable tests, not debug symbols or incremental object caches.
+ENV CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
 RUN rustup component add rustfmt clippy
 RUN apt-get update && apt-get install -y --no-install-recommends cmake libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
 RUN cargo install --locked --version 0.1.78 cargo-chef
@@ -47,18 +49,21 @@ WORKDIR /tools
 RUN git init masscan && git -C masscan remote add origin https://github.com/robertdavidgraham/masscan.git \
     && git -C masscan fetch --depth=1 origin 06902c40d1494881c17b7968ef530e1d6bbd320c \
     && git -C masscan checkout --detach FETCH_HEAD && make -C masscan \
-    && mkdir -p /out/licenses/masscan && cp masscan/bin/masscan /out/masscan && cp masscan/LICENSE /out/licenses/masscan/
+    && mkdir -p /out/licenses/masscan && cp masscan/bin/masscan /out/masscan && cp masscan/LICENSE /out/licenses/masscan/ \
+    && rm -rf /tools/masscan
 RUN git init zgrab2 && git -C zgrab2 remote add origin https://github.com/zmap/zgrab2.git \
     && git -C zgrab2 fetch --depth=1 origin ea734bcf60ef2921684cb522dfb87a07a322afa6 \
     && git -C zgrab2 checkout --detach FETCH_HEAD \
     && cd zgrab2 && go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/zgrab2 ./cmd/zgrab2 \
     && mkdir -p /out/licenses/zgrab2 && cp LICENSE* /out/licenses/zgrab2/ \
-    && cp conf/blocklist.conf /out/zgrab2-blocklist.conf
+    && cp conf/blocklist.conf /out/zgrab2-blocklist.conf \
+    && go clean -cache -modcache && cd /tools && rm -rf zgrab2
 RUN git init nuclei && git -C nuclei remote add origin https://github.com/projectdiscovery/nuclei.git \
     && git -C nuclei fetch --depth=1 origin a8c88feb4a1c8e961b7902534ce3af97e9d524a4 \
     && git -C nuclei checkout --detach FETCH_HEAD \
     && cd nuclei && go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/nuclei ./cmd/nuclei \
-    && mkdir -p /out/licenses/nuclei && cp LICENSE* /out/licenses/nuclei/
+    && mkdir -p /out/licenses/nuclei && cp LICENSE* /out/licenses/nuclei/ \
+    && go clean -cache -modcache && cd /tools && rm -rf nuclei
 FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libpcap0.8 && rm -rf /var/lib/apt/lists/* \
     && install -d -m 0700 /var/lib/network-mapping-scanner /var/log/network-mapping-scanner /root/.config/zgrab2
