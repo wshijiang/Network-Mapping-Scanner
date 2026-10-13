@@ -10,11 +10,15 @@
 
 ---
 
+可选模块化热更新的具体接口和操作见 [MODULE_UPDATES.md](MODULE_UPDATES.md)。
+
 ## 模块架构
 
 ```
 src/
-├── main.rs          # 入口、CLI、编排主循环、身份注册
+├── main.rs          # Tokio 入口，调用库中的 agent_main
+├── lib.rs           # CLI、编排主循环、身份注册及共享模块
+├── modules/         # 独立 Worker、IPC、签名包、任务版本绑定与更新
 ├── config.rs        # TOML 静态配置加载/验证及旧身份字段清理
 ├── storage.rs       # SQLite schema、身份和待上传状态持久化
 ├── scan/            # 扫描流水线、阶段编排与扫描引擎适配器
@@ -40,7 +44,7 @@ src/
 
 ### 模块职责与接口
 
-#### `main.rs`
+#### `lib.rs` 与 `main.rs`
 
 编排层。负责解析 CLI、身份管理、加载配置、组装 pipeline、驱动扫描循环。
 
@@ -764,7 +768,7 @@ request/response。协议版本 1、2 仍可用于滚动升级，但版本 2 不
 
 ### 添加新的上报渠道
 
-替换 `upload.rs` 中的 `Uploader`，或新增 `KafkaUploader` 等结构体。`main.rs` 只需切换实例化。
+替换 `upload.rs` 中的 `Uploader`，或新增 `KafkaUploader` 等结构体。`lib.rs` 只需切换实例化。
 
 ### 添加新的配置项
 
@@ -773,7 +777,7 @@ request/response。协议版本 1、2 仍可用于滚动升级，但版本 2 不
 1. 在 `types.rs` 对应 Config 结构体中加字段（`#[serde(default)]` 实现向后兼容）
 2. 在 `config.rs` 的 `validate()` 中添加验证规则
 3. 在 `config.toml` 和字段说明中补充示例
-4. 在 `main.rs` 或对应模块中使用新字段
+4. 在 `lib.rs` 或对应模块中使用新字段
 
 需要跨重启修改的运行状态则加入 `storage.rs`：提升 `SCHEMA_VERSION`，按旧版本顺序执行
 事务迁移，并为升级和新建数据库各添加测试。不要把一次性注册令牌写入任何表。

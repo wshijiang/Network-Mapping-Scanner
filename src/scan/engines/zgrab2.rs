@@ -167,7 +167,7 @@ pub(crate) async fn run_with_journal(
                 previous_elapsed.saturating_add(started.elapsed().as_millis() as u64),
                 None,
             )?;
-            j.store.start_checkpoint_block(j.origin)?;
+            j.start_block()?;
         }
         let initial = initial_attempts(ports, config);
         let result =

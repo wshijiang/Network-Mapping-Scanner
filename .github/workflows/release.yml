@@ -51,21 +51,23 @@ jobs:
 
       - name: Build scanner
         run: |
-          cargo build --locked --release
+          cargo build --locked --release --bins
 
-          required_glibc="$({
-            objdump -T target/release/scanner-rs \
-              | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p'
-          } | sort -V | tail -n 1)"
-          if [[ -z "$required_glibc" ]]; then
-            echo 'Unable to determine the scanner GLIBC requirement' >&2
-            exit 1
-          fi
-          if dpkg --compare-versions "$required_glibc" gt '2.36'; then
-            echo "Scanner requires GLIBC_$required_glibc, newer than Debian 12 GLIBC_2.36" >&2
-            exit 1
-          fi
-          echo "Scanner maximum GLIBC requirement: GLIBC_$required_glibc"
+          for scanner_binary in scanner-rs scanner-worker scanner-package; do
+            required_glibc="$({
+              objdump -T "target/release/$scanner_binary" \
+                | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p'
+            } | sort -V | tail -n 1)"
+            if [[ -z "$required_glibc" ]]; then
+              echo 'Unable to determine the scanner GLIBC requirement' >&2
+              exit 1
+            fi
+            if dpkg --compare-versions "$required_glibc" gt '2.36'; then
+              echo "Scanner requires GLIBC_$required_glibc, newer than Debian 12 GLIBC_2.36" >&2
+              exit 1
+            fi
+            echo "$scanner_binary maximum GLIBC requirement: GLIBC_$required_glibc"
+          done
 
       - name: Resolve package metadata
         id: package
@@ -97,6 +99,8 @@ jobs:
 
           mkdir -p "$package_root" release
           install -m 0755 target/release/scanner-rs "$package_root/scanner-rs"
+          install -m 0755 target/release/scanner-worker "$package_root/scanner-worker"
+          install -m 0755 target/release/scanner-package "$package_root/scanner-package"
           install -m 0644 config.toml "$package_root/config.example.toml"
           sed -E -i \
             -e 's/^([[:space:]]*(scanner_id|runtime_token)[[:space:]]*=).*/\1 ""/' \

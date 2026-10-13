@@ -73,6 +73,7 @@ cargo build --locked --release
 | 日志 | `./logs/scanner.log.YYYY-MM-DD`，UTC 按天轮转，保留最近 14 份 |
 | 断线恢复 | 带抖动的指数退避；恢复心跳后继续领取任务和上传 |
 | 远程配置 | 任务边界应用；本地禁用的引擎无法远程开启 |
+| 模块热更新 | 可选独立 Worker、签名制品、任务版本绑定与回滚；见[操作指南](docs/MODULE_UPDATES.md) |
 | 远程诊断 | [错误与日志采集](docs/DIAGNOSTICS.md) |
 | 清理待上传结果 | [缓存管理](docs/CACHE_MANAGEMENT.md) |
 

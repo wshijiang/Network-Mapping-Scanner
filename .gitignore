@@ -15,3 +15,8 @@ scanner-state.sqlite3-shm
 *.diagnostics.sqlite3-journal
 *.diagnostics.lock
 *.diagnostics-spool/
+
+scanner-modules/
+scanner-modules.sqlite3*
+trusted-update-keys.json
+*.pkcs8

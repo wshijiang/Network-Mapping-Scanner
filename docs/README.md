@@ -10,6 +10,8 @@
 | --- | --- |
 | [扫描器配置与使用指南](USAGE.md) | 引擎配置、重连、日志与双栈探测 |
 | [Scanner-RS 维护文档](MAINTENANCE.md) | 模块职责、CLI、配置字段与开发约定 |
+| [模块化与热更新详细设计](MODULAR_HOT_UPDATE_DESIGN.md) | 基于现有代码的设计提案：Worker 协议、版本绑定、更新事务、回滚与改造步骤 |
+| [模块执行与热更新操作指南](MODULE_UPDATES.md) | 当前实现：构建、签名制品、在线激活、回滚、HTTPS feed 与兼容边界 |
 
 ## 部署与恢复
 

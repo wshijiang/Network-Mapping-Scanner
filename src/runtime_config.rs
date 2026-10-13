@@ -71,7 +71,7 @@ pub(crate) struct RemoteNucleiConfig {
     pub(crate) max_result_bytes: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RuntimeSnapshot {
     pub(crate) revision: i64,
     pub(crate) rate: i32,

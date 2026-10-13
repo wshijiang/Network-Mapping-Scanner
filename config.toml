@@ -76,3 +76,16 @@ probe_timeout_seconds = 5
 [upload]
 # Endpoint for scan result upload (HTTPS POST JSON)
 endpoint = "https://example.com/api/scanner/result"
+
+[modules]
+# Opt in after building/installing scanner-worker and draining old checkpoints.
+enabled = false
+directory = "./scanner-modules"
+state_database = "./scanner-modules.sqlite3"
+worker_path = "./scanner-worker"
+trusted_keys = "./trusted-update-keys.json"
+cancel_grace_seconds = 5
+stage_timeout_seconds = 86400
+auto_rollback = true
+# Optional HTTPS release feed. No scanner credentials are sent to this URL.
+# desired_url = "https://updates.example.com/scanner/desired.json"

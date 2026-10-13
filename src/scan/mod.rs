@@ -1,8 +1,8 @@
 mod detection;
-mod engines;
+pub(crate) mod engines;
 mod observation;
 mod orchestrator;
-mod plan;
+pub(crate) mod plan;
 
 pub(crate) use engines::masscan::validate_scanner_binary;
 pub(crate) use engines::nuclei::validate_binary as validate_nuclei_binary;

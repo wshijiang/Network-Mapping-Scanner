@@ -26,6 +26,17 @@ pub(crate) enum ScanStageKind {
     VulnerabilityDetection,
 }
 
+impl ScanStageKind {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::PortDiscovery => "port_discovery",
+            Self::ServiceDetection => "service_detection",
+            Self::DnsLookup => "dns_lookup",
+            Self::VulnerabilityDetection => "vulnerability_detection",
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct ScanCapabilities {
     pub(crate) plan_versions: Vec<u16>,
