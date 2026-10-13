@@ -460,7 +460,7 @@ impl Default for DnsConfig {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct NetworkConfig {
     pub(crate) ipv4_enabled: bool,
@@ -488,7 +488,36 @@ fn default_scanner_path() -> String {
     "./a".into()
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MasscanOutputMode {
+    #[default]
+    Compatible,
+    StandardList,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub(crate) struct MasscanConfig {
+    #[serde(rename = "masscan_output_mode")]
+    pub(crate) output_mode: MasscanOutputMode,
+    #[serde(rename = "masscan_wait_seconds")]
+    pub(crate) wait_seconds: u64,
+    #[serde(rename = "masscan_max_runtime_seconds")]
+    pub(crate) max_runtime_seconds: u64,
+}
+
+impl Default for MasscanConfig {
+    fn default() -> Self {
+        Self {
+            output_mode: MasscanOutputMode::Compatible,
+            wait_seconds: 10,
+            max_runtime_seconds: 86_400,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ScannerConfig {
     pub(crate) c_server: String,
     pub(crate) c_port: i64,
@@ -497,11 +526,13 @@ pub(crate) struct ScannerConfig {
     pub(crate) verify_tls: bool,
     #[serde(default = "default_scanner_path")]
     pub(crate) scanner_path: String,
+    #[serde(flatten)]
+    pub(crate) masscan: MasscanConfig,
     /// Legacy TOML identity, imported into SQLite during upgrade.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub(crate) scanner_id: String,
     /// Legacy TOML runtime token, imported into SQLite during upgrade.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub(crate) runtime_token: String,
     #[serde(default = "default_heartbeat_interval")]
     pub(crate) heartbeat_interval_seconds: u64,
@@ -627,7 +658,9 @@ fn default_lease_safety_margin() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{AssignedTask, CacheManager, DnsResolver, ScannerConfig, is_valid_dns_domain};
+    use super::{
+        AssignedTask, CacheManager, DnsResolver, MasscanConfig, ScannerConfig, is_valid_dns_domain,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -718,6 +751,7 @@ mod tests {
             rate: 1_000,
             verify_tls: true,
             scanner_path: "masscan".into(),
+            masscan: MasscanConfig::default(),
             scanner_id: "019c0000-0000-7000-8000-000000000001".into(),
             runtime_token: "secret".into(),
             heartbeat_interval_seconds: 30,
@@ -778,6 +812,8 @@ mod tests {
         assert_eq!(config.connect_timeout_seconds, 5);
         assert_eq!(config.request_timeout_seconds, 15);
         assert_eq!(config.reconnect_max_delay_seconds, 60);
+        assert_eq!(config.scanner_path, "./a");
+        assert_eq!(config.masscan, MasscanConfig::default());
     }
 
     #[test]

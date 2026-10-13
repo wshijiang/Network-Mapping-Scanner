@@ -1,0 +1,62 @@
+# Registration identity and upload progress live in the mounted SQLite directory.
+[scanner]
+# Target API server hostname
+c_server = "server.example.com"
+c_port = 9999
+rate = 1000
+verify_tls = true
+scanner_path = "/usr/local/bin/masscan"
+masscan_output_mode = "standard_list"
+masscan_wait_seconds = 10
+masscan_max_runtime_seconds = 86400
+scanner_id = ""
+runtime_token = ""
+connect_timeout_seconds = 5
+request_timeout_seconds = 15
+reconnect_initial_delay_seconds = 1
+reconnect_max_delay_seconds = 60
+active_task_reconnect_max_delay_seconds = 10
+lease_safety_margin_seconds = 10
+
+[service_detection]
+enabled = true
+required = false
+strategy = "adaptive"
+max_probes_per_endpoint = 8
+confidence_threshold = 80
+zgrab_path = "/usr/local/bin/zgrab2"
+senders = 20
+server_rate_limit = 10
+connect_timeout_seconds = 5
+target_timeout_seconds = 15
+max_result_bytes = 65536
+
+[dns]
+enabled = true
+record_types = ["A", "AAAA", "CNAME", "NS", "MX", "PTR", "SRV", "TXT", "CAA", "SOA", "SVCB", "HTTPS"]
+query_timeout_seconds = 5
+
+[nuclei]
+enabled = false
+path = "/usr/local/bin/nuclei"
+templates_path = "/opt/nuclei-templates/safe"
+severities = ["medium", "high", "critical"]
+rate_limit = 20
+bulk_size = 5
+concurrency = 5
+timeout_seconds = 10
+retries = 1
+max_runtime_seconds = 1800
+max_findings = 10000
+max_result_bytes = 262144
+
+[network]
+ipv4_enabled = true
+ipv6_enabled = true
+ipv4_probe_url = "https://api.ipify.org"
+ipv6_probe_url = "https://api6.ipify.org"
+probe_interval_seconds = 300
+probe_timeout_seconds = 5
+
+[upload]
+endpoint = "https://server.example.com:9999/api/scanner/result"

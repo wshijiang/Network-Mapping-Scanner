@@ -304,6 +304,10 @@ struct MaintenanceProbeResponse {
 }
 
 impl HeartbeatClient {
+    pub(crate) fn with_config_check(mut self, report: crate::config_check::ConfigCheck) -> Self {
+        self.local_config_check = Some(report);
+        self
+    }
     pub(crate) fn with_diagnostics(
         mut self,
         handle: crate::diagnostics::DiagnosticsHandle,

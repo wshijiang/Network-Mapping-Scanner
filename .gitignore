@@ -20,3 +20,9 @@ scanner-modules/
 scanner-modules.sqlite3*
 trusted-update-keys.json
 *.pkcs8
+# Docker runtime secrets and generated build artifacts
+/docker/runtime/
+/docker/output/
+/docker/.env
+/_frontend/
+/docker/__pycache__/

@@ -2,7 +2,7 @@ use super::engines::{dns, masscan, nuclei, zgrab2};
 use super::observation::ScanObservation;
 use super::plan::{ScanPlan, ScanStageKind};
 use crate::error::ScannerError;
-use crate::types::{DnsConfig, NucleiConfig, ServiceDetectionConfig, TargetParams};
+use crate::types::{DnsConfig, MasscanConfig, NucleiConfig, ServiceDetectionConfig, TargetParams};
 use std::sync::atomic::AtomicBool;
 
 pub(crate) enum ScanOutcome {
@@ -16,6 +16,7 @@ pub(crate) struct ScanRuntimeConfig<'a> {
     pub(crate) registry: Option<&'a crate::modules::registry::Registry>,
     pub(crate) journal: Option<crate::journal::ScanJournal<'a>>,
     pub(crate) scanner_path: &'a str,
+    pub(crate) masscan: &'a MasscanConfig,
     pub(crate) service_detection: &'a ServiceDetectionConfig,
     pub(crate) dns: &'a DnsConfig,
     pub(crate) nuclei: &'a NucleiConfig,
@@ -709,6 +710,7 @@ done
                     registry: None,
                     journal: Some(journal),
                     scanner_path: masscan.to_str().unwrap(),
+                    masscan: &MasscanConfig::default(),
                     service_detection: &service,
                     dns: &crate::types::DnsConfig::default(),
                     nuclei: &crate::types::NucleiConfig::default(),
@@ -807,6 +809,10 @@ done
                 registry: None,
                 journal: None,
                 scanner_path: path.to_str().unwrap(),
+                masscan: &MasscanConfig {
+                    output_mode: crate::types::MasscanOutputMode::StandardList,
+                    ..Default::default()
+                },
                 service_detection: &service,
                 dns: &DnsConfig::default(),
                 nuclei: &NucleiConfig::default(),
@@ -829,6 +835,7 @@ done
             panic!("port-only plan must produce a port observation");
         };
         assert_eq!(port.port, 443);
+        assert_eq!(port.observed_at, 1000);
     }
 
     #[cfg(unix)]
@@ -872,6 +879,7 @@ done
                 registry: None,
                 journal: None,
                 scanner_path: path.to_str().unwrap(),
+                masscan: &MasscanConfig::default(),
                 service_detection: &service,
                 dns: &DnsConfig::default(),
                 nuclei: &NucleiConfig::default(),

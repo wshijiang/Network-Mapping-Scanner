@@ -27,3 +27,6 @@ ring = "0.17"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
+
+[build-dependencies]
+toml_edit = "0.22"

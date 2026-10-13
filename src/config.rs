@@ -4,6 +4,7 @@ use crate::types::AppConfig;
 /// Parsed config + raw content kept for comment-preserving writes.
 pub(crate) struct LoadedConfig {
     pub(crate) app: AppConfig,
+    pub(crate) check: crate::config_check::ConfigCheck,
     raw: String,
     path: String,
 }
@@ -18,6 +19,17 @@ pub(crate) fn load(path: &str) -> Result<LoadedConfig, ScannerError> {
         .parse()
         .map_err(|e| ScannerError::Config(format!("failed to parse config {}: {}", path, e)))?;
 
+    let value: serde_json::Value = toml_edit::de::from_str(&raw)
+        .map_err(|_| ScannerError::Config("cannot inspect TOML configuration".into()))?;
+    let check = crate::config_check::inspect_scanner(&value)
+        .map_err(|_| ScannerError::Config("cannot construct configuration field catalog".into()))?;
+    check.emit_startup();
+    if check.error_count() > 0 {
+        return Err(ScannerError::Config(
+            "缺少必需配置，请根据启动提示补齐参数".into(),
+        ));
+    }
+
     let app: AppConfig = toml_edit::de::from_document(doc).map_err(|e| {
         ScannerError::Config(format!("failed to deserialize config {}: {}", path, e))
     })?;
@@ -30,6 +42,7 @@ pub(crate) fn load(path: &str) -> Result<LoadedConfig, ScannerError> {
     );
     Ok(LoadedConfig {
         app,
+        check,
         raw,
         path: path.to_owned(),
     })
@@ -119,6 +132,17 @@ fn validate(cfg: &AppConfig) -> Result<(), ScannerError> {
             "scanner.rate",
             cfg.scanner.rate <= 0 || cfg.scanner.rate > i64::from(i32::MAX),
             "must be between 1 and 2147483647",
+        ),
+        (
+            "scanner.masscan_wait_seconds",
+            cfg.scanner.masscan.wait_seconds > 300,
+            "must be between 0 and 300",
+        ),
+        (
+            "scanner.masscan_max_runtime_seconds",
+            !(1..=604_800).contains(&cfg.scanner.masscan.max_runtime_seconds)
+                || cfg.scanner.masscan.max_runtime_seconds <= cfg.scanner.masscan.wait_seconds,
+            "must be between 1 and 604800 and greater than masscan_wait_seconds",
         ),
         (
             "upload.endpoint",
@@ -354,5 +378,42 @@ mod tests {
         assert!(updated.contains("runtime_token = \"\""));
         assert!(!updated.contains("one-time-secret"));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn masscan_configuration_validates_limits_and_output_mode() {
+        let raw = include_str!("../config.toml");
+        let mut cfg: AppConfig = toml_edit::de::from_str(raw).unwrap();
+        assert_eq!(cfg.scanner.masscan, crate::types::MasscanConfig::default());
+        cfg.scanner.masscan.wait_seconds = 301;
+        assert!(
+            validate(&cfg)
+                .unwrap_err()
+                .to_string()
+                .contains("masscan_wait_seconds")
+        );
+        cfg.scanner.masscan.wait_seconds = 10;
+        for limit in [0, 10, 604_801] {
+            cfg.scanner.masscan.max_runtime_seconds = limit;
+            assert!(
+                validate(&cfg)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("masscan_max_runtime_seconds")
+            );
+        }
+        let explicit = raw.replace("[scanner]", "[scanner]\nmasscan_output_mode = \"standard_list\"\nmasscan_wait_seconds = 0\nmasscan_max_runtime_seconds = 60");
+        let cfg: AppConfig = toml_edit::de::from_str(&explicit).unwrap();
+        assert_eq!(
+            cfg.scanner.masscan.output_mode,
+            crate::types::MasscanOutputMode::StandardList
+        );
+        assert_eq!(cfg.scanner.masscan.wait_seconds, 0);
+        assert_eq!(cfg.scanner.masscan.max_runtime_seconds, 60);
+        validate(&cfg).unwrap();
+        assert!(
+            toml_edit::de::from_str::<AppConfig>(&explicit.replace("standard_list", "invalid"))
+                .is_err()
+        );
     }
 }
