@@ -10,6 +10,7 @@ mod journal;
 mod logging;
 mod modules;
 mod network;
+mod performance;
 mod reconnect;
 mod register;
 mod runtime_config;
@@ -1975,7 +1976,7 @@ async fn scan_loop(
                 heartbeat_client,
                 active_task,
                 assigned_task.task_id,
-                TaskReport::Failure(&message),
+                TaskReport::RouteFailure(&message),
                 config.retry_policy,
                 config.lease_safety_margin,
             )
@@ -2247,7 +2248,11 @@ async fn scan_loop(
                     heartbeat_client,
                     active_task,
                     assigned_task.task_id,
-                    TaskReport::Failure(&error_message),
+                    if e.is_route_failure() {
+                        TaskReport::RouteFailure(&error_message)
+                    } else {
+                        TaskReport::Failure(&error_message)
+                    },
                     config.retry_policy,
                     config.lease_safety_margin,
                 )
@@ -2287,6 +2292,23 @@ async fn scan_loop(
             "scan task completed"
         );
 
+        if active_task.cancellation_reason().is_none()
+            && !active_task
+                .lease_safety_expired(config.lease_safety_margin + Duration::from_secs(3))
+                .await
+        {
+            let performance = performance::collect(
+                &results,
+                &target,
+                scan_started_at.elapsed().as_millis().min(604800000) as u64,
+            )
+            .await;
+            if active_task.cancellation_reason().is_none() {
+                heartbeat_client
+                    .report_performance(assigned_task.task_id, &performance)
+                    .await;
+            }
+        }
         if let Err(error) = cache.begin_task_with_observations(assigned_task.task_id, &results) {
             tracing::error!(
                 event = "ResultCacheBindFailed",
@@ -2443,6 +2465,7 @@ async fn apply_runtime_configuration(
 #[derive(Clone, Copy)]
 enum TaskReport<'a> {
     Failure(&'a str),
+    RouteFailure(&'a str),
     TerminalFailure(&'a str),
     Cancelled,
 }
@@ -2473,6 +2496,9 @@ async fn report_task_status_with_retry(
         let report_future = async {
             match report {
                 TaskReport::Failure(message) => client.report_failure(task_id, message).await,
+                TaskReport::RouteFailure(message) => {
+                    client.report_route_failure(task_id, message).await
+                }
                 TaskReport::TerminalFailure(message) => {
                     client.report_terminal_failure(task_id, message).await
                 }

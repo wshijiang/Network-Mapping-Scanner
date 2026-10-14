@@ -325,6 +325,31 @@ pub(crate) enum ScannerError {
 }
 
 impl ScannerError {
+    pub(crate) fn is_route_failure(&self) -> bool {
+        match self {
+            Self::Io(error) => matches!(
+                error.kind(),
+                std::io::ErrorKind::AddrNotAvailable
+                    | std::io::ErrorKind::NetworkUnreachable
+                    | std::io::ErrorKind::HostUnreachable
+            ),
+            Self::EngineStage { source, .. } => source.is_route_failure(),
+            // Engine stderr has no typed errno. Only explicit OS route errors
+            // are recognized; generic timeouts and empty discovery never match.
+            Self::ExternalProcess { detail, .. } | Self::Scan(detail) => {
+                let text = detail.to_ascii_lowercase();
+                [
+                    "network is unreachable",
+                    "no route to host",
+                    "cannot assign requested address",
+                ]
+                .iter()
+                .any(|reason| text.contains(reason))
+            }
+            _ => false,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn external_process(
         engine: &'static str,

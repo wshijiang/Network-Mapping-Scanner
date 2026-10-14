@@ -231,6 +231,7 @@ struct TaskFailurePayload<'a> {
     task_id: Uuid,
     error: &'a str,
     retryable: bool,
+    failure_class: &'a str,
 }
 
 #[derive(Serialize)]
@@ -487,7 +488,8 @@ impl HeartbeatClient {
         task_id: Uuid,
         error: &str,
     ) -> Result<(), ScannerError> {
-        self.report_task_failure(task_id, error, true).await
+        self.report_task_failure(task_id, error, true, "scan_error")
+            .await
     }
 
     pub(crate) async fn report_terminal_failure(
@@ -495,20 +497,52 @@ impl HeartbeatClient {
         task_id: Uuid,
         error: &str,
     ) -> Result<(), ScannerError> {
-        self.report_task_failure(task_id, error, false).await
+        self.report_task_failure(task_id, error, false, "scan_error")
+            .await
     }
 
+    pub(crate) async fn report_route_failure(
+        &self,
+        task_id: Uuid,
+        error: &str,
+    ) -> Result<(), ScannerError> {
+        self.report_task_failure(task_id, error, true, "route_unavailable")
+            .await
+    }
+    pub(crate) async fn report_performance(
+        &self,
+        task_id: Uuid,
+        performance: &crate::performance::Performance,
+    ) {
+        let Some(base) = self.failure_url.strip_suffix("/api/scanner/task/fail") else {
+            return;
+        };
+        let url = format!("{base}/api/scanner/task/performance");
+        let payload = serde_json::json!({"scanner_id":self.scanner_id,"task_id":task_id,"performance":performance});
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            self.client
+                .post_json(&url, &payload, "report task performance"),
+        )
+        .await
+        {
+            Ok(Ok(response)) if response.status().is_success() => {}
+            _ => tracing::debug!(%task_id,"optional task quality report was not accepted"),
+        }
+    }
     async fn report_task_failure(
         &self,
         task_id: Uuid,
         error: &str,
         retryable: bool,
+        failure_class: &str,
     ) -> Result<(), ScannerError> {
         let payload = TaskFailurePayload {
             scanner_id: self.scanner_id,
             task_id,
             error,
             retryable,
+            failure_class,
         };
         tracing::debug!(%task_id, retryable, "reporting scan task failure");
         let response = self
