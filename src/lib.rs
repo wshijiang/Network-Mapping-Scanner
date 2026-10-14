@@ -2134,7 +2134,7 @@ async fn scan_loop(
             scan_profile = %scan_plan.profile,
             address_family = %target.address_family,
         );
-        let results = match run_scan(
+        let (results, dns_results) = match run_scan(
             ScanRuntimeConfig {
                 environment: pinned.as_ref().map(|value| &value.environment),
                 modules_config: config
@@ -2159,7 +2159,7 @@ async fn scan_loop(
         .instrument(scan_span)
         .await
         {
-            Ok(ScanOutcome::Completed(results)) => results,
+            Ok(ScanOutcome::Completed(results, dns_results)) => (results, dns_results),
             Ok(ScanOutcome::Cancelled) => match active_task.cancellation_reason() {
                 Some(TaskCancellationReason::ServerRequested) => {
                     let reported = report_task_status_with_retry(
@@ -2301,6 +2301,7 @@ async fn scan_loop(
                 &results,
                 &target,
                 scan_started_at.elapsed().as_millis().min(604800000) as u64,
+                &dns_results,
             )
             .await;
             if active_task.cancellation_reason().is_none() {

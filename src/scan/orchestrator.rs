@@ -6,7 +6,11 @@ use crate::types::{DnsConfig, MasscanConfig, NucleiConfig, ServiceDetectionConfi
 use std::sync::atomic::AtomicBool;
 
 pub(crate) enum ScanOutcome {
-    Completed(Vec<ScanObservation>),
+    // Keep DNS evidence even when dns_ports omits DNS from the result stream.
+    Completed(
+        Vec<ScanObservation>,
+        Vec<super::observation::DnsObservation>,
+    ),
     Cancelled,
 }
 
@@ -217,7 +221,7 @@ pub(crate) async fn run_scan(
         ports.len() + services.len() + dns_observations.len() + vulnerabilities.len(),
     );
     if plan.profile != "dns_ports" {
-        observations.extend(dns_observations.into_iter().map(ScanObservation::Dns));
+        observations.extend(dns_observations.iter().cloned().map(ScanObservation::Dns));
     }
     observations.extend(ports.into_iter().map(ScanObservation::Port));
     observations.extend(services.into_iter().map(ScanObservation::Service));
@@ -228,7 +232,7 @@ pub(crate) async fn run_scan(
     );
     let mut identities = std::collections::HashSet::new();
     observations.retain(|o| identities.insert(o.identity()));
-    Ok(ScanOutcome::Completed(observations))
+    Ok(ScanOutcome::Completed(observations, dns_observations))
 }
 
 async fn module_stage(
@@ -728,7 +732,7 @@ done
                 assert!(result.is_err());
                 std::fs::remove_file(&gate).unwrap();
             } else {
-                let super::ScanOutcome::Completed(results) = result.unwrap() else {
+                let super::ScanOutcome::Completed(results, _) = result.unwrap() else {
                     panic!("recovered scan must complete");
                 };
                 assert_eq!(results.len(), 4);
@@ -828,7 +832,7 @@ done
         .await
         .unwrap();
         std::fs::remove_file(path).unwrap();
-        let ScanOutcome::Completed(results) = outcome else {
+        let ScanOutcome::Completed(results, _) = outcome else {
             panic!("port-only scan must complete");
         };
         assert_eq!(results.len(), 1);
@@ -837,6 +841,73 @@ done
         };
         assert_eq!(port.port, 443);
         assert_eq!(port.observed_at, 1000);
+    }
+
+    #[tokio::test]
+    async fn recovered_dns_ports_keep_resolution_evidence_outside_the_result_stream() {
+        let directory =
+            std::env::temp_dir().join(format!("scanner-dns-quality-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let store = crate::storage::StateStore::open(directory.join("state.sqlite3")).unwrap();
+        let mut journal =
+            crate::journal::ScanJournal::open(&store, "origin", "quality-task".into()).unwrap();
+        let dns:ScanObservation=serde_json::from_value(serde_json::json!({"kind":"dns","observed_at":1,"question":{"name":"example.com","type":"A","class":"IN"},"response_code":"NOERROR","answers":[{"type":"A","value":"192.0.2.1","ttl":60}]})).unwrap();
+        let port:ScanObservation=serde_json::from_value(serde_json::json!({"kind":"port","ip":"192.0.2.1","port":443,"protocol":"tcp","state":"open","source":"masscan","observed_at":1})).unwrap();
+        journal.save(2, 0, 100, Some(&[dns, port])).unwrap();
+        drop(journal);
+        let journal =
+            crate::journal::ScanJournal::open(&store, "origin", "quality-task".into()).unwrap();
+        let plan = ScanPlan {
+            version: SCAN_PLAN_VERSION,
+            profile: "dns_ports".into(),
+            stages: vec![
+                ScanStageSpec {
+                    kind: ScanStageKind::DnsLookup,
+                    required: true,
+                },
+                ScanStageSpec {
+                    kind: ScanStageKind::PortDiscovery,
+                    required: true,
+                },
+            ],
+        };
+        let target = TargetParams {
+            ip: "example.com".into(),
+            port: "443".into(),
+            rate: 1,
+            address_family: "ipv4".into(),
+        };
+        let result = run_scan(
+            ScanRuntimeConfig {
+                environment: None,
+                modules_config: None,
+                registry: None,
+                journal: Some(journal),
+                scanner_path: "unused",
+                masscan: &MasscanConfig::default(),
+                service_detection: &ServiceDetectionConfig::default(),
+                dns: &DnsConfig::default(),
+                nuclei: &NucleiConfig::default(),
+                dns_resolvers: &[],
+                ipv4_ready: true,
+                ipv6_ready: false,
+            },
+            &plan,
+            &target,
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        let ScanOutcome::Completed(observations, resolutions) = result else {
+            panic!("checkpoint must complete")
+        };
+        assert_eq!(observations.len(), 1);
+        assert!(matches!(observations[0], ScanObservation::Port(_)));
+        assert_eq!(resolutions.len(), 1);
+        assert_eq!(resolutions[0].question.name, "example.com");
+        assert_eq!(resolutions[0].answers[0].value, "192.0.2.1");
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[cfg(unix)]
