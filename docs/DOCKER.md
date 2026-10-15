@@ -131,7 +131,25 @@ tag 必须与 Cargo.toml/Cargo.lock 版本一致，且提交已包含于远端 `
 
 首次引入 Docker 发布也应使用新的、明确批准的版本，不能为触发新工作流重推或复用已发布 tag。
 
-发布生成 `vX.Y.Z` 和 `sha-<完整提交>`；不自动维护 `latest`，避免并发旧版本覆盖新版本。
+发布生成 `vX.Y.Z` 和 `sha-<完整提交>`；稳定版本发布成功后自动维护以下可移动标签：
+
+| 标签 | 运行架构 |
+| --- | --- |
+| `ghcr.io/wshijiang/network-mapping-scanner-amd64:latest` | 仅 Linux AMD64，保留该架构的构建证明 |
+| `ghcr.io/wshijiang/network-mapping-scanner-arm64:latest` | 仅 Linux ARM64，保留该架构的构建证明 |
+
+`docker/latest.py` 先读回正式版本，核对组件、Git tag 对应提交、两种架构的配置和各自证明的关联。
+按数值比较稳定版本，旧版本不能覆盖更新的 latest；预发布版本不移动 latest。
+所有标签更新与正式发布共享仓库级并发锁。两个架构使用独立的镜像名称，各自维护 `:latest`。
+Skopeo 跨镜像仓库复制对应架构的全部 layers 和构建证明，逐个读回核对 digest；
+注册表不支持两个镜像仓库的原子事务，失败后可重试修复部分更新。
+版本与 SHA 标签保持不可变，latest 不替代生产部署的 digest 固定。
+
+已有正式镜像可在 **Docker images → Run workflow** 填写 `promote_version`（如 `0.1.19`），
+复用相同校验与 `container-release` 环境，仅补齐 latest，不构建、不重推版本或 SHA 标签。
+此入口不依赖 `DOCKER_PUBLISH_ENABLED`：它只提升已存在的正式镜像；留空仍只构建。
+首次创建这两个 GHCR 包后，检查它们各自的可见性和 Actions 访问权限。
+
 若任一正式标签已经存在，立即拒绝覆盖。网络/认证失败也会停止，不能视为标签不存在。
 发布后读回 manifest，确认两种架构、证明文件和标签 digest 一致，并在运行摘要记录 digest。
 `build-<run-id>-<attempt>-<arch>` 是发布阶段上传 OCI 的暂存标签，不是稳定版本；暂不自动删除。
