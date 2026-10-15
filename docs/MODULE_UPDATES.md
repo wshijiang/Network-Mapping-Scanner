@@ -8,7 +8,7 @@
 
 同一 Worker 可实现四种 stage，但每个发布包可只更新一个 stage。内容寻址包可以包含不同构建版本的 Worker 与外部引擎；后续任务按该 stage 的映射使用新构建，因此升级解析器、探测策略和 DNS 实现不需要重启 Agent。
 
-保持单活动任务、plan v1、现有四类 observation、结果上传协议 3 及 500 条/8 MiB 的批次限制。模块状态位于独立 schema 1 数据库，主状态库仍为 schema 3。
+保持单活动任务、plan v1、现有四类 observation、结果上传协议 3 及 500 条/8 MiB 的批次限制。模块状态位于独立 schema 1 数据库，当前主状态库为 schema 4（含注册凭据摘要）；Worker 升级不迁移主状态库。
 
 ## 构建与启用
 
@@ -138,7 +138,7 @@ desired_url = "https://updates.example.com/scanner/desired.json"
 
 ## Agent 升级与验证
 
-热更新对象为 Worker、外部引擎和模板；Agent 本身仍需排空任务后由部署工具受控重启。首次从旧版迁移，以及回退到不理解模块 pin 的旧扫描端，均应排空任务；保持主 DB schema 3 并不代表可任意回退。
+热更新对象为 Worker、外部引擎和模板；Agent 本身仍需排空任务后由部署工具受控重启。首次从旧版迁移，以及回退到不理解模块 pin 的旧扫描端，均应排空任务；主 DB schema 相同也不代表可任意回退。Agent 的 schema 兼容性与完整备份要求见[部署指南](DEPLOYMENT.md#升级与恢复)。
 
 ```sh
 cargo fmt --check

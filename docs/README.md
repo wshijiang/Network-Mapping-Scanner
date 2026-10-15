@@ -17,7 +17,8 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [Docker 构建与部署](DOCKER.md) | 多架构镜像、GitHub CI、配置、持久化与发布门禁 |
+| [扫描端部署指南](DEPLOYMENT.md) | 部署选型、原生安装、注册、systemd、升级恢复与验收 |
+| [Docker 构建与部署](DOCKER.md) | Compose、注册、状态卷、升级排障及镜像构建发布 |
 | [Nuclei 漏洞扫描部署与运维](NUCLEI.md) | 模板治理、参数语义与上线检查 |
 | [masscan 标准输出适配与迁移](MASSCAN.md) | 官方 list 输出、兼容模式、切换验证与回滚 |
 | [扫描与上传恢复](recovery.md) | 扫描状态持久化与重启恢复 |

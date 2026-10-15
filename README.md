@@ -4,7 +4,7 @@
 
 负责注册认证、领取任务、执行扫描流水线并上传结构化结果。支持持久化恢复、租约续期、IPv4/IPv6 能力探测和远程日志诊断。
 
-[快速开始](#快速开始) · [使用指南](docs/USAGE.md) · [维护参考](docs/MAINTENANCE.md) · [文档中心](docs/README.md)
+[快速开始](#快速开始) · [部署指南](docs/DEPLOYMENT.md) · [使用指南](docs/USAGE.md) · [维护参考](docs/MAINTENANCE.md) · [文档中心](docs/README.md)
 
 ## 扫描能力
 
@@ -35,6 +35,8 @@ flowchart LR
 
 ### 1. 准备环境
 
+容器部署优先阅读 [Docker 指南](docs/DOCKER.md)，镜像已包含扫描引擎和官方模板。以下为源码运行示例；发布归档、原生安装和 systemd 托管见[部署指南](docs/DEPLOYMENT.md)。
+
 - Linux，Rust / Cargo（edition 2024）。
 - 端口扫描节点安装 masscan，并具备发包所需权限。
 - 服务识别节点安装 zgrab2；漏洞扫描节点另需 Nuclei 和经过审核的签名模板目录。
@@ -45,12 +47,12 @@ flowchart LR
 ```sh
 git clone https://github.com/wshijiang/Network-Mapping-Scanner.git
 cd Network-Mapping-Scanner
-cargo build --locked --release
+cargo build --locked --release --bins
 ```
 
 ### 3. 配置并注册
 
-编辑 `config.toml` 中的 `scanner.c_server`、`scanner.c_port`、扫描速率和引擎参数。按节点容量选择速率，保留 TLS 校验；完整配置见[使用指南](docs/USAGE.md)。
+编辑 `config.toml` 中的 `scanner.c_server`、`scanner.c_port`、**`upload.endpoint`**、扫描速率和引擎绝对路径。官方 masscan 需设置 `scanner.masscan_output_mode = "standard_list"`；首次验收建议速率 1000，保留 TLS 校验。仓库示例地址、`./a` 和高发包速率需按环境替换，见[部署配置](docs/DEPLOYMENT.md#配置)。
 
 在控制台创建扫描器，使用返回的 ID 和一次性注册令牌首次启动：
 
@@ -59,7 +61,7 @@ cargo build --locked --release
   --id '<scanner-id>' --token '<registration-token>'
 ```
 
-注册成功后身份写入本地 SQLite。后续启动无需再次传入注册令牌：
+该命令注册成功后将身份写入本地 SQLite 并退出。使用相同工作目录和数据库路径，去掉注册参数，才会进入扫描循环：
 
 ```sh
 ./target/release/scanner-rs --config config.toml
@@ -95,6 +97,8 @@ cargo run -- --help
 
 | 我想了解 | 阅读入口 |
 | --- | --- |
+| 安装、注册、systemd、升级与验收 | [部署指南](docs/DEPLOYMENT.md) |
+| 镜像、Compose 和持久化数据卷 | [Docker 部署](docs/DOCKER.md) |
 | 服务识别、配置与双栈探测 | [使用指南](docs/USAGE.md) |
 | 模块、CLI 和参数定义 | [维护参考](docs/MAINTENANCE.md) |
 | 模板治理、恢复与诊断 | [文档中心](docs/README.md) |

@@ -2,27 +2,31 @@
 
 启动配置检查兼容文件部署和 Docker env 配置；终端、日志及控制端 Web 提示见 [启动配置检查](CONFIG_CHECK.md)。
 
-[项目首页](../README.md) · [文档中心](README.md) · [masscan](MASSCAN.md) · [恢复](recovery.md)
+[项目首页](../README.md) · [部署总览与原生安装](DEPLOYMENT.md) · [文档中心](README.md) · [masscan](MASSCAN.md) · [恢复](recovery.md)
 
 镜像 `ghcr.io/wshijiang/network-mapping-scanner` 支持 Linux AMD64/ARM64，包含 scanner-rs、
 官方 masscan 1.3.2、zgrab2 v1.0.0 和 Nuclei v3.11.1。全部工具固定提交，Nuclei 默认关闭，
 镜像内置官方最新稳定版模板，CI 在 prepare 中解析一次不可变提交供两种架构共用。许可证及对应源码见 [第三方工具说明](../docker/THIRD_PARTY.md)。
 Rust 1.98.0、Go 1.26.8 与运行环境均基于 Debian 12，基础镜像固定多架构 digest。
 
-## 本地构建与准备
+使用已有镜像无需本地编译。先完成服务端部署，所有命令从 `Network-Mapping-Scanner/` 运行；需要 Docker Engine 与 Compose ≥ 2.20，host 网络面向 Linux 主机。
+
+[准备配置](#准备运行配置) · [注册与启动](#首次注册与运行) · [节点验收](#nuclei-与节点验收) · [升级与恢复](#升级与恢复) · [常见问题](#常见问题) · [本地构建](#可选本地构建) · [CI 发布](#github-自动构建与发布)
+
+## 准备运行配置
 
 从 `Network-Mapping-Scanner/` 运行：
 
 ```sh
-docker buildx build --build-arg REVISION="$(git rev-parse HEAD)" \
-  --tag network-mapping-scanner:local --load .
 mkdir -p docker/runtime
 cp docker/.env.example docker/.env
+chmod 0600 docker/.env
 ```
 
 编辑 `docker/.env`：`SCANNER_IMAGE` 填已批准版本或完整 digest，
 `NM__SCANNER__C_SERVER`、`NM__SCANNER__C_PORT` 指向服务端。
 上传地址默认从同一主机和端口生成，也可设置 `NM__UPLOAD__ENDPOINT`。
+主机字段只填主机名/IP，不填协议、端口和路径；使用服务端的**实际对外入口**，例如代理后的域名与 443。跨主机不能填 `localhost`，也不能使用服务端 Compose 内部服务名 `server`。模板中的镜像占位版本必须替换。`cp` 仅用于首次安装，已有节点编辑原文件并保留数据卷。
 Docker 默认 `--config-source env`，Compose 通过 `env_file: ./.env` 注入参数，无需挂载 TOML。
 变量按 `NM__SECTION__FIELD` 映射到 `section.field`，数字/布尔按字段类型解析，数组使用 JSON。
 未知变量报错；可通过对应的 `_FILE` 变量读取 Secret，直接值与 `_FILE` 不得同时提供。
@@ -30,6 +34,9 @@ Docker 默认 `--config-source env`，Compose 通过 `env_file: ./.env` 注入�
 
 文件部署继续使用 `--config config.toml`（默认 file 模式），不会被环境配置隐式覆盖。
 私有 CA 可按 Compose 注释挂载完整可信 CA bundle；保留 `NM__SCANNER__VERIFY_TLS=true`。
+例如将包含所需公共 CA 与私有根 CA 的 PEM bundle 放在 `docker/runtime/ca-certificates.crt`，取消 Compose 对应挂载的注释。该绑定会替换容器的系统 CA bundle，应保留所需公共信任链，供服务端、模板更新和备用公网 IP 接口使用；无需复制服务端私钥。
+
+首次启动前确认镜像可拉取、服务端 HTTPS 从此主机可达、授权目标路由正确、数据卷独立，且节点内存/磁盘足够。镜像已有引擎和模板，不要覆盖整个 `/usr/local/bin` 或可写状态目录来“补装”工具。
 
 ## 权限、网络与状态
 
@@ -57,14 +64,20 @@ NM__REGISTRATION__TOKEN=控制台返回的一次性Token
 
 ```sh
 docker compose --env-file docker/.env -f docker/compose.example.yml config --quiet
+docker compose --env-file docker/.env -f docker/compose.example.yml pull
 docker compose --env-file docker/.env -f docker/compose.example.yml up -d
+docker compose --env-file docker/.env -f docker/compose.example.yml ps
+docker compose --env-file docker/.env -f docker/compose.example.yml logs --tail=100 scanner
 ```
+
+`config --quiet` 只验证 Compose 结构与插值，不验证 Token、应用参数、引擎或远端就绪。配置展开和容器环境可能含凭据，排障时只共享脱敏日志。私有 GHCR 包需要注册表读取权限。
 
 首次启动自动注册，将运行令牌和注册凭据 SHA-256 摘要一起原子写入 SQLite，然后继续运行。
 容器重启或重建时，如果凭据摘要未变化，直接恢复身份，不再消耗注册 Token。
 更换一次性 Token 后重建容器会重新注册；失败不替换本地身份、不记录成功摘要。
 若服务端已消耗 Token 而响应或本地落盘失败，需要重新签发 Token，注册接口与本地数据库不是跨系统事务。
 注册成功后可以删除 Token；只保留相同 ID 或同时删除注册两项均可继续恢复身份。
+清除 `.env` 中的注册 Token 后，在任务边界使用 `up -d --force-recreate scanner` 更新容器环境，确认仍沿用 scanner-data 中的身份。
 更换 ID 时若有未上传结果会拒绝切换。数据卷丢失或更换服务端地址后，需要重新签发注册凭据。
 运行令牌失效不会触发无限注册重试，应由管理员提供新的一次性 Token。
 
@@ -93,6 +106,64 @@ NET_RAW、官方 masscan list 输出和 zgrab2 HTTP 握手，并核对 Nuclei �
 生产必须进一步验证 host 网络、IPv4/IPv6、服务端注册/心跳、任务取消、断线恢复、
 SQLite 上传恢复和审核模板联调。没有周期执行 --health-check：该 CLI 会打开状态数据库，
 且当前实现远端健康失败仍可能返回成功，不适合作为容器自动重启依据。以服务端心跳和诊断监控节点。
+
+### 现场验收
+
+- 控制台显示注册后的同一 ID、持续心跳和 `accepting_tasks=true`，所需 IPv4/IPv6 与 profile 可用。
+- 对已授权的小范围目标完成端口任务，再按需测试服务识别、DNS、Nuclei；确认 `ResultUploadCompleted` 和控制台可查询结果。
+- 正常 `stop scanner` 使用 SIGINT，状态和引擎正常收尾；再次 `up -d scanner` 恢复原身份，不消耗注册 Token。
+- 在维护窗口验证断线恢复与保留卷重建；观察日志、上传状态和服务端任务归属，不能仅以容器 running 判断扫描可用。
+- 监控 scanner-data、scanner-logs 的磁盘空间，备份配置与状态，并确认每个节点使用不同数据卷。
+
+## 升级与恢复
+
+1. 记录当前镜像 digest、引擎/模板版本和配置，核对目标版本的协议及 schema 兼容性。先验收服务端，再选择一个节点试升级；暂停新任务分配并等待上传完成。
+2. 在 `.env` 中修改 `SCANNER_IMAGE` 为固定版本/digest，保持服务端地址、项目名和卷不变，先校验、拉取并停止节点：
+
+   ```sh
+   docker compose --env-file docker/.env -f docker/compose.example.yml config --quiet
+   docker compose --env-file docker/.env -f docker/compose.example.yml pull scanner
+   docker compose --env-file docker/.env -f docker/compose.example.yml stop scanner
+   ```
+
+3. 确认节点与扫描引擎已退出，以现有卷备份工具保存**整个 scanner-data** 及配置/日志；挂载目录部署则停机备份整个目录。不要在运行中仅复制 SQLite 主文件；还需包含 WAL/SHM、诊断库/快照及已启用的模块资源。
+4. 重建节点并检查日志：
+
+   ```sh
+   docker compose --env-file docker/.env -f docker/compose.example.yml up -d --force-recreate scanner
+   docker compose --env-file docker/.env -f docker/compose.example.yml logs --tail=100 scanner
+   ```
+
+5. 验收身份恢复、心跳、引擎能力及授权任务，再逐批升级其他节点。正常升级无需重新注册或填写运行令牌。
+
+Compose 项目名默认为 `network-mapping-scanner`。同一 Docker 主机部署多个节点时，为每个节点使用独立配置与固定 `-p` 项目名、独立 ID，且所有命令保持该项目名；否则会操作同一容器和数据卷。更换项目名会创建新的空卷，不能把它误判为身份失效。
+
+旧程序可能拒绝升级后的 schema 4。回滚需先确认兼容性，必要时停机恢复升级前完整数据备份，再用旧 digest 重建；服务端可能已接收部分批次，恢复后按任务归属和幂等上传收敛。不要执行 `down -v`、清空 SQLite 或复制其他节点身份。Nuclei 内置模板也可能随镜像改变，回滚验收应核对实际模板版本，详见 [Nuclei 指南](NUCLEI.md)。
+
+## 常见问题
+
+| 现象 | 优先检查 |
+| --- | --- |
+| 镜像拉取失败 | 占位版本、GHCR 包权限/可见性、目标架构 |
+| 证书错误 | 服务端域名、可信 CA bundle 是否挂入容器，保留 TLS 校验 |
+| 注册失败/Token 已使用 | ID 与 Token 是否配对、是否已消费；重新签发后重建容器，保留原状态 |
+| 重建后要求注册 | 项目名和 scanner-data 是否改变、服务端 origin 是否改变；先找到原身份库 |
+| 在线但不接任务 | 查看启动引擎检查、`accepting_tasks`、维护状态和地址族/profile |
+| raw-socket 权限错误 | 是否为已验证的 Linux host 网络、root + NET_RAW，接口与引擎权限是否正确 |
+| env 修改未生效 | 使用原 `.env` 与 Compose 文件重建容器；restart 不更新环境 |
+| SQLite/诊断锁冲突 | 是否有其他容器、原生进程或维护命令共享同一数据目录 |
+| 停止后被强杀 | 检查 SIGINT、实际收尾耗时、90 秒预算及磁盘/子进程状态 |
+
+## 可选本地构建
+
+仅需要自定义镜像时，在扫描端仓库执行：
+
+```sh
+docker buildx build --build-arg REVISION="$(git rev-parse HEAD)" \
+  --tag network-mapping-scanner:local --load .
+```
+
+把 `.env` 中 `SCANNER_IMAGE` 设置为 `network-mapping-scanner:local`，使用前述配置与启动步骤；本地镜像无需执行远端 `pull`。此构建不会发布镜像，工具和模板来源仍以 Dockerfile 固定提交为准。
 
 ## GitHub 自动构建与发布
 
