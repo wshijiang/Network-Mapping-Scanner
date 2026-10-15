@@ -1,6 +1,7 @@
 mod cache;
 mod config;
 mod config_check;
+mod config_env;
 mod diagnostics;
 mod error;
 mod health;
@@ -10,9 +11,11 @@ mod journal;
 mod logging;
 mod modules;
 mod network;
+mod nuclei_templates;
 mod performance;
 mod reconnect;
 mod register;
+mod registration_env;
 mod runtime_config;
 mod scan;
 mod storage;
@@ -57,6 +60,9 @@ use uuid::Uuid;
     about = "Network port scanner orchestrator"
 )]
 struct Cli {
+    /// 配置来源：文件部署使用 file，Docker 使用 env
+    #[arg(long, value_enum, default_value = "file")]
+    config_source: ConfigSource,
     /// Run a maintenance command instead of starting the scan loop
     #[command(subcommand)]
     command: Option<ScannerCommand>,
@@ -97,6 +103,12 @@ struct Cli {
     /// SQLite database for scanner identity and durable upload state
     #[arg(long, default_value = "./scanner-state.sqlite3")]
     database: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum ConfigSource {
+    File,
+    Env,
 }
 
 #[derive(Subcommand, Debug)]
@@ -216,7 +228,7 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
     tracing::debug!(
         version = env!("CARGO_PKG_VERSION"),
         process_id = std::process::id(),
-        config_path = %cli.config,
+        config_source = ?cli.config_source,
         health_check = cli.health_check,
         system_info_only = cli.get_system_info,
         registration_requested = cli.id.is_some() || cli.token.is_some(),
@@ -239,7 +251,11 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
     }
 
     // ---- load config ----
-    let mut loaded = load(&cli.config).inspect_err(|e| {
+    let mut loaded = match cli.config_source {
+        ConfigSource::File => load(&cli.config),
+        ConfigSource::Env => config::load_env(),
+    }
+    .inspect_err(|e| {
         log_event!(
             LogLevel::Error,
             "CONFIG-LOAD",
@@ -249,7 +265,7 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
         eprintln!("\x1b[31mconfig error: {}\x1b[0m", e);
     })?;
 
-    tracing::debug!(config_path = %cli.config, "configuration loaded and validated");
+    tracing::debug!(config_source = ?cli.config_source, "configuration loaded and validated");
 
     let server_origin = loaded.app.scanner.server_origin();
     if let Some(ScannerCommand::Module { command }) = cli.command.as_ref() {
@@ -291,7 +307,17 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
         tracing::warn!(%error, "identity is stored in SQLite but could not be removed from TOML");
     }
 
-    if let Some(requested_scanner_id) = cli.id.as_deref()
+    let env_registration = if cli.config_source == ConfigSource::Env
+        && !cli.health_check
+        && cli.id.is_none()
+        && cli.token.is_none()
+    {
+        registration_env::load()?
+    } else {
+        registration_env::Registration::default()
+    };
+    let requested_id = cli.id.as_deref().or(env_registration.scanner_id.as_deref());
+    if let Some(requested_scanner_id) = requested_id
         && let Some(pending_scanner_id) = state_store.pending_upload_scanner_id(&server_origin)?
         && pending_scanner_id != requested_scanner_id
     {
@@ -299,7 +325,7 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
             "cannot register scanner {requested_scanner_id} while results for scanner {pending_scanner_id} are pending upload"
         )));
     }
-    if let Some(requested_scanner_id) = cli.id.as_deref()
+    if let Some(requested_scanner_id) = requested_id
         && requested_scanner_id != loaded.app.scanner.scanner_id
         && CacheManager::legacy_state_has_pending(&cli.state_file)?
     {
@@ -310,15 +336,30 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
     }
 
     // ---- handle --id / --token ----
-    let identity_changed = handle_identity(&cli, &mut loaded).await?;
+    let automatic_registration = env_registration.needs_registration(
+        &loaded.app.scanner.scanner_id,
+        !loaded.app.scanner.runtime_token.is_empty(),
+        state_store
+            .load_registration_fingerprint(&server_origin)?
+            .as_deref(),
+    )?;
+    let explicit_registration = cli.id.is_some() || cli.token.is_some();
+    let registration_id = cli.id.as_deref().or(env_registration.scanner_id.as_deref());
+    let registration_token = cli.token.as_deref().or(env_registration.token.as_deref());
+    let identity_changed = if explicit_registration || automatic_registration {
+        handle_identity(registration_id, registration_token, &mut loaded).await?
+    } else {
+        false
+    };
 
     if identity_changed {
-        state_store.save_identity(
+        state_store.save_registered_identity(
             &server_origin,
             &StoredIdentity {
                 scanner_id: loaded.app.scanner.scanner_id.clone(),
                 runtime_token: loaded.app.scanner.runtime_token.clone(),
             },
+            &registration_env::fingerprint(registration_id.unwrap(), registration_token.unwrap()),
         )?;
         println!("\x1b[32mscanner identity stored in SQLite\x1b[0m");
         // When --id/--token are explicitly passed, registration is the goal; exit.
@@ -449,6 +490,7 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
         Duration::from_secs(cfg.scanner.request_timeout_seconds),
     )?;
 
+    nuclei_templates::prepare(&cfg.nuclei).await?;
     let module_registry = if cfg.modules.enabled {
         Some(
             modules::registry::Registry::open(cfg.modules.clone(), cfg, server_origin.clone())
@@ -764,11 +806,12 @@ fn execute_maintenance_command(
 
 /// Returns `true` if the runtime identity was changed.
 async fn handle_identity(
-    cli: &Cli,
+    id: Option<&str>,
+    token: Option<&str>,
     loaded: &mut config::LoadedConfig,
 ) -> Result<bool, ScannerError> {
-    let id_provided = cli.id.is_some();
-    let token_provided = cli.token.is_some();
+    let id_provided = id.is_some();
+    let token_provided = token.is_some();
 
     if !id_provided && !token_provided {
         tracing::debug!("registration options not provided; using stored identity");
@@ -787,8 +830,8 @@ async fn handle_identity(
         ));
     }
 
-    let scanner_id = cli.id.as_deref().expect("checked above");
-    let registration_token = cli.token.as_deref().expect("checked above");
+    let scanner_id = id.expect("checked above");
+    let registration_token = token.expect("checked above");
     match register::register(
         &loaded.app.scanner.c_server,
         loaded.app.scanner.c_port,

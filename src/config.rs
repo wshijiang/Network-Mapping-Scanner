@@ -48,6 +48,45 @@ pub(crate) fn load(path: &str) -> Result<LoadedConfig, ScannerError> {
     })
 }
 
+pub(crate) fn load_env() -> Result<LoadedConfig, ScannerError> {
+    load_env_pairs(std::env::vars().filter(|(key, _)| !key.starts_with("NM__REGISTRATION__")))
+}
+
+fn load_env_pairs(
+    pairs: impl IntoIterator<Item = (String, String)>,
+) -> Result<LoadedConfig, ScannerError> {
+    let mut value: serde_json::Value =
+        toml_edit::de::from_str(include_str!("../docker/config.example.toml"))
+            .map_err(|_| ScannerError::Config("invalid embedded container defaults".into()))?;
+    // A deployment must name its own server instead of using the example host.
+    value["scanner"]["c_server"] = serde_json::Value::String(String::new());
+    value["upload"]["endpoint"] = serde_json::Value::String(String::new());
+    crate::config_env::apply(
+        &mut value,
+        pairs,
+        crate::config_check::environment_field_allowed,
+    )?;
+    if value["upload"]["endpoint"].as_str() == Some("") {
+        let host = value["scanner"]["c_server"].as_str().unwrap_or("");
+        let port = value["scanner"]["c_port"].as_i64().unwrap_or(0);
+        value["upload"]["endpoint"] =
+            serde_json::Value::String(format!("https://{host}:{port}/api/scanner/result"));
+    }
+    let app: AppConfig = serde_json::from_value(value.clone()).map_err(|_| {
+        ScannerError::Config("environment configuration has invalid field types".into())
+    })?;
+    validate(&app)?;
+    let check = crate::config_check::inspect_scanner(&value)
+        .map_err(|_| ScannerError::Config("cannot inspect environment configuration".into()))?;
+    check.emit_startup();
+    Ok(LoadedConfig {
+        app,
+        check,
+        raw: String::new(),
+        path: String::new(),
+    })
+}
+
 impl LoadedConfig {
     pub(crate) fn has_legacy_runtime_token(&self) -> bool {
         !self.app.scanner.runtime_token.is_empty()
@@ -70,6 +109,9 @@ impl LoadedConfig {
 
     /// Remove runtime identity from the legacy TOML after it has been stored in SQLite.
     pub(crate) fn clear_legacy_identity(&self) -> Result<(), ScannerError> {
+        if self.path.is_empty() {
+            return Ok(());
+        }
         tracing::debug!(config_path = %self.path, "removing legacy scanner identity");
         let mut doc: toml_edit::DocumentMut = self.raw.parse().map_err(|e| {
             ScannerError::Config(format!("failed to re-parse config for saving: {}", e))
@@ -276,6 +318,16 @@ fn validate(cfg: &AppConfig) -> Result<(), ScannerError> {
             "must not be empty when nuclei is enabled",
         ),
         (
+            "nuclei.template_update_timeout_seconds",
+            !(1..=3600).contains(&cfg.nuclei.template_update_timeout_seconds),
+            "must be between 1 and 3600",
+        ),
+        (
+            "nuclei.update_templates",
+            cfg.modules.enabled && cfg.nuclei.update_templates,
+            "module mode uses versioned template bundles; update through the module release instead",
+        ),
+        (
             "nuclei.severities",
             cfg.nuclei.severities.is_empty() || cfg.nuclei.severities.len() > 5,
             "must contain 1 to 5 entries",
@@ -353,6 +405,42 @@ fn validate(cfg: &AppConfig) -> Result<(), ScannerError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn environment_loads_without_toml_and_derives_upload_endpoint() {
+        let config = super::load_env_pairs([
+            (
+                "NM__SCANNER__C_SERVER".into(),
+                "scanner.example.test".into(),
+            ),
+            ("NM__NUCLEI__UPDATE_TEMPLATES".into(), "true".into()),
+            ("NM__SCANNER__MASSCAN_WAIT_SECONDS".into(), "0".into()),
+        ])
+        .unwrap();
+        assert_eq!(
+            config.app.upload.endpoint,
+            "https://scanner.example.test:9999/api/scanner/result"
+        );
+        assert!(config.app.scanner.verify_tls);
+        assert_eq!(config.app.scanner.masscan.wait_seconds, 0);
+        assert!(config.app.nuclei.update_templates);
+        assert_eq!(
+            config.app.nuclei.bundled_templates_path,
+            "/opt/nuclei-templates/bundled"
+        );
+        assert!(!config.has_legacy_secret());
+        config.clear_legacy_identity().unwrap();
+    }
+    #[test]
+    fn environment_refuses_the_example_server_or_invalid_boolean() {
+        assert!(super::load_env_pairs([]).is_err());
+        assert!(
+            super::load_env_pairs([
+                ("NM__SCANNER__C_SERVER".into(), "example.test".into()),
+                ("NM__SCANNER__VERIFY_TLS".into(), "not-a-boolean".into())
+            ])
+            .is_err()
+        );
+    }
     use super::*;
 
     #[test]

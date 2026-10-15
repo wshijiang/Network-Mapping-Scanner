@@ -26,7 +26,7 @@
 ## 安装前提
 
 - 扫描节点已安装可执行的 `nuclei`，或配置其绝对路径；
-- 模板位于本地独立目录，已经过审核、签名并固定版本；
+- 模板使用 Docker 内置的官方稳定版本，或本地独立的签名模板目录；
 - 服务端已支持 `vulnerability_scan` 和结果协议版本 3；
 - masscan 可正常运行，zgrab2 为可选依赖。
 
@@ -52,6 +52,9 @@ nuclei -validate \
 enabled = true
 path = "nuclei"
 templates_path = "/opt/nuclei-templates/safe"
+bundled_templates_path = ""
+update_templates = false
+template_update_timeout_seconds = 300
 severities = ["medium", "high", "critical"]
 rate_limit = 20
 bulk_size = 5
@@ -67,7 +70,10 @@ max_result_bytes = 262144
 |---|---:|---|
 | `enabled` | `false` | 是否声明并执行漏洞扫描能力 |
 | `path` | `nuclei` | 绝对/相对路径，或从 `PATH` 解析的命令名 |
-| `templates_path` | 空 | 启用时必填，且必须是目录 |
+| `templates_path` | 空 | 运行时模板目录；Docker 使用数据卷内的可写副本 |
+| `bundled_templates_path` | 空 | 可选内置模板种子；Docker 为 `/opt/nuclei-templates/bundled` |
+| `update_templates` | `false` | 本地启动时是否联网更新模板；只在 enabled=true 时执行 |
+| `template_update_timeout_seconds` | `300` | 单次启动更新超时，1–3600 秒 |
 | `severities` | medium/high/critical | 1–5 项：info、low、medium、high、critical |
 | `rate_limit` | `20` | 全局每秒最大请求数，1–10000 |
 | `bulk_size` | `5` | 每个模板并行分析的主机数，1–1000 |
@@ -106,7 +112,7 @@ nuclei
 
 - `-no-interactsh` 排除依赖 OAST 的模板；
 - `-disable-unsigned-templates` 拒绝未签名或签名不匹配的模板；
-- `-disable-update-check` 禁止运行时自动检查 Nuclei 或模板更新；
+- `-disable-update-check` 禁止扫描命令隐式检查 Nuclei 或模板更新；
 - 未传入 `-dast`、`-code` 或 `-headless`，因此不会主动启用这些高风险执行模式；
 - 只解析标准输出中的 JSONL，不保存 Nuclei 原始 request/response 字段。
 
@@ -151,7 +157,23 @@ nuclei
 总 JSON 大小进行验证。稳定身份由端点、模板 ID、matcher 和匹配位置组成，用于避免上传重试
 产生重复记录。
 
-## 模板治理
+## 模板更新与治理
+
+Docker 镜像默认包含官方完整模板。CI 查询最新稳定 Release 后将 tag 解析为不可变提交，
+两个原生架构使用相同的模板 SHA。镜像 labels、BUILD-INFO 与 `NM-BUNDLED-REVISION` 记录来源；
+本地默认构建固定为 v10.5.0（2026-10-15 核对），也可显式传入模板版本和提交 build args。
+
+env 开关为 `NM__NUCLEI__UPDATE_TEMPLATES`，文件部署对应 `[nuclei].update_templates`。
+关闭时不执行更新命令；开启且 Nuclei enabled 时，在正常启动、领取任务前单独运行
+`nuclei -update-templates -update-template-dir <暂存目录>`，只更新模板，不升级程序。
+该命令不能附带 `-disable-update-check`，因为当前上游版本会连显式更新也一并禁用。
+实际扫描命令仍固定关闭更新。启动准备、注册和健康检查的行为分别处理：注册/健康检查不更新模板。
+
+模板在暂存目录准备，成功后替换活动目录；更新失败或超时保留旧目录并使本次启动报错。
+目录切换中断会在下次启动恢复。默认数据卷保存可写副本，重建容器不会丢失已更新模板。
+更换镜像内置版本会重新播种；希望只使用自定义目录时清空 bundled_templates_path。
+本地更新开关不会由服务端远程配置开启。签名模块模式使用独立版本化模板包，不能同时启用本地更新。
+
 
 推荐使用不可变、版本化的模板目录，例如 `/opt/nuclei-templates/2026-09-03`：
 

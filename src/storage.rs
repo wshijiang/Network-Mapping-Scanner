@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredIdentity {
@@ -378,6 +378,39 @@ impl StateStore {
         Ok(())
     }
 
+    pub(crate) fn load_registration_fingerprint(
+        &self,
+        origin: &str,
+    ) -> Result<Option<String>, ScannerError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT fingerprint FROM scanner_registration WHERE server_origin=?1",
+                [origin],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub(crate) fn save_registered_identity(
+        &mut self,
+        origin: &str,
+        identity: &StoredIdentity,
+        fingerprint: &str,
+    ) -> Result<(), ScannerError> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute("INSERT INTO scanner_identity(server_origin,scanner_id,runtime_token,updated_at) VALUES(?1,?2,?3,unixepoch())
+            ON CONFLICT(server_origin) DO UPDATE SET scanner_id=excluded.scanner_id,runtime_token=excluded.runtime_token,updated_at=excluded.updated_at",
+            params![origin, identity.scanner_id, identity.runtime_token])?;
+        transaction.execute(
+            "INSERT INTO scanner_registration(server_origin,fingerprint) VALUES(?1,?2)
+            ON CONFLICT(server_origin) DO UPDATE SET fingerprint=excluded.fingerprint",
+            params![origin, fingerprint],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub(crate) fn load_runtime_configuration(
         &self,
         server_origin: &str,
@@ -660,6 +693,11 @@ fn migrate(connection: &mut Connection) -> Result<(), ScannerError> {
             PRAGMA user_version=3;")?;
         transaction.commit()?;
     }
+    if current_version < 4 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch("CREATE TABLE scanner_registration(server_origin TEXT PRIMARY KEY REFERENCES scanner_identity(server_origin) ON DELETE CASCADE,fingerprint TEXT NOT NULL); PRAGMA user_version=4;")?;
+        transaction.commit()?;
+    }
     Ok(())
 }
 
@@ -688,6 +726,68 @@ fn set_private_permissions(_path: &Path) -> Result<(), ScannerError> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn registration_identity_and_fingerprint_survive_reopen_and_are_scoped_to_server() {
+        let path = database_path();
+        let mut store = StateStore::open(path.clone()).unwrap();
+        let identity = StoredIdentity {
+            scanner_id: "id".into(),
+            runtime_token: "runtime-secret".into(),
+        };
+        store
+            .save_registered_identity("https://server-a", &identity, "fingerprint")
+            .unwrap();
+        drop(store);
+        let store = StateStore::open(path.clone()).unwrap();
+        assert_eq!(
+            store.load_identity("https://server-a").unwrap(),
+            Some(identity)
+        );
+        assert_eq!(
+            store
+                .load_registration_fingerprint("https://server-a")
+                .unwrap()
+                .as_deref(),
+            Some("fingerprint")
+        );
+        assert!(
+            store
+                .load_registration_fingerprint("https://server-b")
+                .unwrap()
+                .is_none()
+        );
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn failed_registration_persistence_does_not_replace_the_old_identity() {
+        let path = database_path();
+        let mut store = StateStore::open(path.clone()).unwrap();
+        let old = StoredIdentity {
+            scanner_id: "id".into(),
+            runtime_token: "old".into(),
+        };
+        store.save_identity("origin", &old).unwrap();
+        store.connection.execute_batch("CREATE TRIGGER reject_registration BEFORE INSERT ON scanner_registration BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+        let new = StoredIdentity {
+            scanner_id: "id".into(),
+            runtime_token: "new".into(),
+        };
+        assert!(
+            store
+                .save_registered_identity("origin", &new, "new-fingerprint")
+                .is_err()
+        );
+        assert_eq!(store.load_identity("origin").unwrap(), Some(old));
+        assert!(
+            store
+                .load_registration_fingerprint("origin")
+                .unwrap()
+                .is_none()
+        );
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn schema_two_upgrade_preserves_pending_upload_and_identity() {
         let path = database_path();
         let mut store = StateStore::open(path.clone()).unwrap();
@@ -705,7 +805,7 @@ mod tests {
         store
             .begin_upload("origin", "scanner", task, upload, &[])
             .unwrap();
-        store.connection.execute_batch("DROP TABLE scan_checkpoint_part; DROP TABLE scan_checkpoint; DROP TABLE scan_retry; DROP TABLE upload_archive; PRAGMA user_version=2;").unwrap();
+        store.connection.execute_batch("DROP TABLE scanner_registration; DROP TABLE scan_checkpoint_part; DROP TABLE scan_checkpoint; DROP TABLE scan_retry; DROP TABLE upload_archive; PRAGMA user_version=2;").unwrap();
         drop(store);
         let store = StateStore::open(path.clone()).unwrap();
         let state = store.load_upload("origin", "scanner").unwrap().unwrap();
@@ -724,7 +824,7 @@ mod tests {
                 .connection
                 .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            3
+            SCHEMA_VERSION
         );
         drop(store);
         std::fs::remove_file(path).unwrap();

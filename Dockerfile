@@ -64,6 +64,26 @@ RUN git init nuclei && git -C nuclei remote add origin https://github.com/projec
     && cd nuclei && go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/nuclei ./cmd/nuclei \
     && mkdir -p /out/licenses/nuclei && cp LICENSE* /out/licenses/nuclei/ \
     && go clean -cache -modcache && cd /tools && rm -rf nuclei
+
+FROM tools-builder AS templates-builder
+# Local builds default to the latest stable release reviewed on 2026-10-15.
+# CI resolves the latest official release once and shares its immutable SHA
+# across both architectures through these build arguments.
+ARG NUCLEI_TEMPLATES_VERSION=v10.5.0
+ARG NUCLEI_TEMPLATES_REVISION=f8b8b8dcd70d93826c3767e1829ef8243af9f03b
+RUN test "${#NUCLEI_TEMPLATES_REVISION}" = 40 \
+    && test -z "$(printf '%s' "$NUCLEI_TEMPLATES_REVISION" | tr -d 'a-f0-9')" \
+    && git init /out/templates \
+    && git -C /out/templates remote add origin https://github.com/projectdiscovery/nuclei-templates.git \
+    && git -C /out/templates fetch --depth=1 origin "$NUCLEI_TEMPLATES_REVISION" \
+    && git -C /out/templates checkout --detach FETCH_HEAD \
+    && test "$(git -C /out/templates rev-parse HEAD)" = "$NUCLEI_TEMPLATES_REVISION" \
+    && test -d /out/templates/http && test -d /out/templates/network \
+    && printf '%s\n%s\n' "$NUCLEI_TEMPLATES_VERSION" "$NUCLEI_TEMPLATES_REVISION" > /out/templates/NM-BUNDLED-REVISION \
+    && mkdir -p /out/licenses/nuclei-templates \
+    && cp /out/templates/LICENSE.md /out/licenses/nuclei-templates/LICENSE.md \
+    && rm -rf /out/templates/.git
+
 FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libpcap0.8 && rm -rf /var/lib/apt/lists/* \
     && install -d -m 0700 /var/lib/network-mapping-scanner /var/log/network-mapping-scanner /root/.config/zgrab2
@@ -72,18 +92,25 @@ COPY --from=rust-builder /out/scanner-rs /out/scanner-worker /out/scanner-packag
 COPY --from=tools-builder /out/masscan /out/zgrab2 /out/nuclei /usr/local/bin/
 COPY --from=tools-builder /out/zgrab2-blocklist.conf /root/.config/zgrab2/blocklist.conf
 COPY --from=tools-builder /out/licenses ./licenses
+COPY --from=templates-builder /out/templates /opt/nuclei-templates/bundled
+COPY --from=templates-builder /out/licenses/nuclei-templates ./licenses/nuclei-templates
 COPY LICENSE ./licenses/LICENSE
 COPY docker/THIRD_PARTY.md ./licenses/THIRD_PARTY.md
 ARG VERSION=development
 ARG REVISION=unknown
 ARG TARGETARCH
+ARG NUCLEI_TEMPLATES_VERSION=v10.5.0
+ARG NUCLEI_TEMPLATES_REVISION=f8b8b8dcd70d93826c3767e1829ef8243af9f03b
 LABEL org.opencontainers.image.title="network-mapping-scanner" \
       org.opencontainers.image.source="https://github.com/wshijiang/Network-Mapping-Scanner" \
       org.opencontainers.image.version=$VERSION \
-      org.opencontainers.image.revision=$REVISION
+      org.opencontainers.image.revision=$REVISION \
+      io.network-mapping.nuclei-templates.version=$NUCLEI_TEMPLATES_VERSION \
+      io.network-mapping.nuclei-templates.revision=$NUCLEI_TEMPLATES_REVISION
 RUN printf 'scanner-version=%s\nscanner-commit=%s\narchitecture=%s\nrust=1.98.0\ngo=1.26.8\nmasscan-commit=06902c40d1494881c17b7968ef530e1d6bbd320c\nzgrab2-commit=ea734bcf60ef2921684cb522dfb87a07a322afa6\nnuclei-commit=a8c88feb4a1c8e961b7902534ce3af97e9d524a4\n' "$VERSION" "$REVISION" "$TARGETARCH" > BUILD-INFO
+RUN printf 'nuclei-templates-version=%s\nnuclei-templates-commit=%s\n' "$NUCLEI_TEMPLATES_VERSION" "$NUCLEI_TEMPLATES_REVISION" >> BUILD-INFO
 # Existing shutdown handling listens for SIGINT; use the same signal in Compose.
 STOPSIGNAL SIGINT
 ENV XDG_CONFIG_HOME=/var/lib/network-mapping-scanner/config XDG_CACHE_HOME=/var/lib/network-mapping-scanner/cache
 ENTRYPOINT ["scanner-rs"]
-CMD ["--config", "/etc/network-mapping-scanner/config.toml", "--database", "/var/lib/network-mapping-scanner/scanner-state.sqlite3", "--state-file", "/var/lib/network-mapping-scanner/scanner-state.json", "--log-directory", "/var/log/network-mapping-scanner"]
+CMD ["--config-source", "env", "--database", "/var/lib/network-mapping-scanner/scanner-state.sqlite3", "--state-file", "/var/lib/network-mapping-scanner/scanner-state.json", "--log-directory", "/var/log/network-mapping-scanner"]

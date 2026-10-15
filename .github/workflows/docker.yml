@@ -29,6 +29,8 @@ jobs:
       revision: ${{ steps.metadata.outputs.revision }}
       image: ${{ steps.metadata.outputs.image }}
       frontend_revision: ${{ steps.metadata.outputs.frontend_revision }}
+      templates_version: ${{ steps.templates.outputs.templates_version }}
+      templates_revision: ${{ steps.templates.outputs.templates_revision }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -38,6 +40,11 @@ jobs:
       - name: Validate package version, lockfile and release ancestry
         id: metadata
         run: python3 docker/ci.py metadata --component scanner
+      - name: Resolve latest official stable Nuclei templates for both architectures
+        id: templates
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 docker/templates_metadata.py
 
 
   build:
@@ -90,6 +97,8 @@ jobs:
           build-args: |
             VERSION=${{ needs.prepare.outputs.version }}
             REVISION=${{ needs.prepare.outputs.revision }}
+            NUCLEI_TEMPLATES_VERSION=${{ needs.prepare.outputs.templates_version }}
+            NUCLEI_TEMPLATES_REVISION=${{ needs.prepare.outputs.templates_revision }}
 
           cache-from: type=gha,scope=scanner-${{ matrix.arch }}
           cache-to: type=gha,scope=scanner-${{ matrix.arch }},mode=max

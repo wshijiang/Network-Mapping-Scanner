@@ -24,3 +24,5 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
       - run: cargo build --locked --release --bins
+      - name: Verify env registration and restart recovery against local HTTPS fixture
+        run: python3 tests/registration_env.py target/release/scanner-rs

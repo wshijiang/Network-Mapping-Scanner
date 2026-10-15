@@ -49,10 +49,15 @@ record_types = ["A", "AAAA", "CNAME", "NS", "MX", "PTR", "SRV", "TXT", "CAA", "S
 query_timeout_seconds = 5
 
 [nuclei]
-# 安全漏洞扫描默认关闭。启用前安装 nuclei，并使用经过审核和固定版本的模板目录。
+# 漏洞扫描默认关闭；Docker 已内置工具和官方模板。
 enabled = false
 path = "nuclei"
 templates_path = "/opt/nuclei-templates/safe"
+# 文件部署可留空；Docker 示例提供镜像内置模板目录作为初始来源。
+bundled_templates_path = ""
+# 仅在启用 Nuclei 的正常启动时更新一次，注册和健康检查不执行更新。
+update_templates = false
+template_update_timeout_seconds = 300
 severities = ["medium", "high", "critical"]
 rate_limit = 20
 bulk_size = 5

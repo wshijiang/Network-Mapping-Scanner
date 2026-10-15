@@ -131,6 +131,19 @@ def main():
             assert '1.3.2' in masscan.stdout+masscan.stderr
             nuclei = docker('run', '--rm', '--entrypoint', 'nuclei', image, '-version')
             assert '3.11.1' in nuclei.stdout+nuclei.stderr
+            labels = config['Config']['Labels']
+            bundled = '/opt/nuclei-templates/bundled'
+            template_revision = docker('run', '--rm', '--entrypoint', 'cat', image,
+                                       bundled+'/NM-BUNDLED-REVISION').stdout.splitlines()
+            assert template_revision == [labels['io.network-mapping.nuclei-templates.version'],
+                                         labels['io.network-mapping.nuclei-templates.revision']]
+            catalog = docker('run', '--rm', '--read-only', '--network', 'none',
+                             '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m',
+                             '--tmpfs', '/var/lib/network-mapping-scanner:rw,size=128m',
+                             '--entrypoint', 'nuclei', image, '-tl', '-t', bundled+'/http/technologies',
+                             '-update-template-dir', bundled, '-disable-update-check',
+                             '-disable-unsigned-templates', '-no-interactsh')
+            assert '.yaml' in catalog.stdout, 'Bundled official templates were not loaded offline'
             target_network = json.loads(docker('inspect', es_name).stdout)[0]['NetworkSettings']['Networks'][namespace]
             target = target_network['IPAddress']
             target_mac = target_network['MacAddress']

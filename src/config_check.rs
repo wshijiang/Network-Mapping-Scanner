@@ -5,6 +5,10 @@ use serde_json::{Value, json};
 
 include!(concat!(env!("OUT_DIR"), "/public_config_fields.rs"));
 
+pub(crate) fn environment_field_allowed(path: &str) -> bool {
+    PUBLIC_CONFIG_FIELDS.contains(&path)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigIssueKind {
@@ -48,7 +52,7 @@ impl ConfigCheck {
                     kind: ConfigIssueKind::Required,
                     source: "startup".into(),
                     default_value: None,
-                    description: "必需的部署参数，请在配置文件中填写。".into(),
+                    description: "必需的部署参数，请通过启动配置提供。".into(),
                 });
             }
         }
@@ -189,7 +193,10 @@ fn source_for(field: &str) -> &'static str {
         "service_detection.zgrab_path"
         | "service_detection.required"
         | "nuclei.path"
-        | "nuclei.templates_path" => "startup",
+        | "nuclei.templates_path"
+        | "nuclei.bundled_templates_path"
+        | "nuclei.update_templates"
+        | "nuclei.template_update_timeout_seconds" => "startup",
         _ if field.starts_with("service_detection.")
             || field.starts_with("dns.")
             || field.starts_with("nuclei.") =>

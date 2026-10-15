@@ -16,6 +16,7 @@ network.ipv6_probe_url
 network.probe_interval_seconds
 network.probe_timeout_seconds
 nuclei.bulk_size
+nuclei.bundled_templates_path
 nuclei.concurrency
 nuclei.enabled
 nuclei.max_findings
@@ -25,8 +26,10 @@ nuclei.path
 nuclei.rate_limit
 nuclei.retries
 nuclei.severities
+nuclei.template_update_timeout_seconds
 nuclei.templates_path
 nuclei.timeout_seconds
+nuclei.update_templates
 scanner.active_task_reconnect_max_delay_seconds
 scanner.c_port
 scanner.c_server

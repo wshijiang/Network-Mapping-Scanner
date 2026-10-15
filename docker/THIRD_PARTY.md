@@ -11,4 +11,8 @@
 masscan 使用 AGPL。分发镜像时，分发方必须按其许可证提供对应源码及构建说明；
 固定源码可以从上述提交页面或 GitHub 的该提交归档取得，构建步骤见根目录 Dockerfile。
 如修改工具，须同步提供修改后的对应源码，不能只链接未修改的上游。
-Nuclei 模板不包含在镜像内，模板的来源、版本、签名和许可证由部署方独立审核。
+Nuclei 官方模板随镜像分发，来源为 https://github.com/projectdiscovery/nuclei-templates 。
+CI 在每次构建前解析最新稳定 Release，两个架构固定同一提交；本地默认 v10.5.0，
+对应 f8b8b8dcd70d93826c3767e1829ef8243af9f03b（2026-10-15 核对）。
+模板上游 LICENSE.md 保存在镜像 licenses/nuclei-templates/ 中，来源记录在 BUILD-INFO 与 OCI labels。
+运行时可选择更新模板，实际执行仍受扫描器签名、协议、目标和速率设置约束。

@@ -339,6 +339,11 @@ pub(crate) struct NucleiConfig {
     pub(crate) enabled: bool,
     pub(crate) path: String,
     pub(crate) templates_path: String,
+    /// Optional immutable seed directory shipped with the Docker image.
+    pub(crate) bundled_templates_path: String,
+    /// Local startup setting; never enabled by a remote task configuration.
+    pub(crate) update_templates: bool,
+    pub(crate) template_update_timeout_seconds: u64,
     pub(crate) severities: Vec<String>,
     pub(crate) rate_limit: u32,
     pub(crate) bulk_size: usize,
@@ -357,6 +362,9 @@ impl Default for NucleiConfig {
             path: "nuclei".into(),
             port_fallback: true,
             templates_path: String::new(),
+            bundled_templates_path: String::new(),
+            update_templates: false,
+            template_update_timeout_seconds: 300,
             severities: vec!["medium".into(), "high".into(), "critical".into()],
             rate_limit: 20,
             bulk_size: 5,

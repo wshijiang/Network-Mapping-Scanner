@@ -1,3 +1,4 @@
+# Embedded public container defaults; Docker deployment values come from .env.
 # Registration identity and upload progress live in the mounted SQLite directory.
 [scanner]
 # Target API server hostname
@@ -39,7 +40,10 @@ query_timeout_seconds = 5
 [nuclei]
 enabled = false
 path = "/usr/local/bin/nuclei"
-templates_path = "/opt/nuclei-templates/safe"
+templates_path = "/var/lib/network-mapping-scanner/nuclei-templates"
+bundled_templates_path = "/opt/nuclei-templates/bundled"
+update_templates = false
+template_update_timeout_seconds = 300
 severities = ["medium", "high", "critical"]
 rate_limit = 20
 bulk_size = 5

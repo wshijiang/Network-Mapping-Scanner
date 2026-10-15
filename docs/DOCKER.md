@@ -1,12 +1,12 @@
 # Docker 扫描端部署
 
-启动配置检查兼容文件部署和 Docker 只读配置挂载；终端、日志及控制端 Web 提示见 [启动配置检查](CONFIG_CHECK.md)。
+启动配置检查兼容文件部署和 Docker env 配置；终端、日志及控制端 Web 提示见 [启动配置检查](CONFIG_CHECK.md)。
 
 [项目首页](../README.md) · [文档中心](README.md) · [masscan](MASSCAN.md) · [恢复](recovery.md)
 
 镜像 `ghcr.io/wshijiang/network-mapping-scanner` 支持 Linux AMD64/ARM64，包含 scanner-rs、
 官方 masscan 1.3.2、zgrab2 v1.0.0 和 Nuclei v3.11.1。全部工具固定提交，Nuclei 默认关闭，
-镜像不包含模板。许可证及对应源码见 [第三方工具说明](../docker/THIRD_PARTY.md)。
+镜像内置官方最新稳定版模板，CI 在 prepare 中解析一次不可变提交供两种架构共用。许可证及对应源码见 [第三方工具说明](../docker/THIRD_PARTY.md)。
 Rust 1.98.0、Go 1.26.8 与运行环境均基于 Debian 12，基础镜像固定多架构 digest。
 
 ## 本地构建与准备
@@ -17,15 +17,19 @@ Rust 1.98.0、Go 1.26.8 与运行环境均基于 Debian 12，基础镜像固定�
 docker buildx build --build-arg REVISION="$(git rev-parse HEAD)" \
   --tag network-mapping-scanner:local --load .
 mkdir -p docker/runtime
-cp docker/config.example.toml docker/runtime/config.toml
 cp docker/.env.example docker/.env
 ```
 
-修改 `scanner.c_server`、`c_port` 和 `upload.endpoint` 指向同一服务端；上传地址使用该服务器的
-实际 API 路径。保留 verify_tls=true、官方 masscan 绝对路径及 standard_list 模式。
-`.env` 的 SCANNER_IMAGE 填已批准版本或完整 digest。私有 CA 可按 Compose 注释挂载完整可信 CA bundle，
-其中保留公共根证书；不要以关闭证书校验替代安装 CA。配置文件需 root 可读且其他用户不可读，
-管理员可使用属主 0:0、模式 0400；容器删掉了 DAC_OVERRIDE，root 也不能绕过任意文件权限。
+编辑 `docker/.env`：`SCANNER_IMAGE` 填已批准版本或完整 digest，
+`NM__SCANNER__C_SERVER`、`NM__SCANNER__C_PORT` 指向服务端。
+上传地址默认从同一主机和端口生成，也可设置 `NM__UPLOAD__ENDPOINT`。
+Docker 默认 `--config-source env`，Compose 通过 `env_file: ./.env` 注入参数，无需挂载 TOML。
+变量按 `NM__SECTION__FIELD` 映射到 `section.field`，数字/布尔按字段类型解析，数组使用 JSON。
+未知变量报错；可通过对应的 `_FILE` 变量读取 Secret，直接值与 `_FILE` 不得同时提供。
+`.env` 建议设为 0600，不提交到仓库。修改后通过 `up -d --force-recreate` 重建容器，restart 不更新环境。
+
+文件部署继续使用 `--config config.toml`（默认 file 模式），不会被环境配置隐式覆盖。
+私有 CA 可按 Compose 注释挂载完整可信 CA bundle；保留 `NM__SCANNER__VERIFY_TLS=true`。
 
 ## 权限、网络与状态
 
@@ -44,34 +48,42 @@ scanner-data 保存 SQLite、WAL/SHM、身份、上传进度和旧 JSON 导入�
 
 ## 首次注册与运行
 
-在服务端创建扫描器后取得一次性 ID/Token。正常进程没有身份时会退出，因此先执行注册任务。
-从扫描仓库运行，交互读取 Token，避免写入 Compose 或 shell 历史：
+在服务端创建扫描器后，把 ID 和一次性 Token 填入 `docker/.env`：
+
+```dotenv
+NM__REGISTRATION__SCANNER_ID=控制台返回的UUID
+NM__REGISTRATION__TOKEN=控制台返回的一次性Token
+```
 
 ```sh
-read -r -p 'Scanner ID: ' SCANNER_ID
-read -r -s -p 'Registration token: ' SCANNER_TOKEN
-printf '\n'
-docker compose --env-file docker/.env -f docker/compose.example.yml run --rm scanner \
-  --config /etc/network-mapping-scanner/config.toml \
-  --database /var/lib/network-mapping-scanner/scanner-state.sqlite3 \
-  --state-file /var/lib/network-mapping-scanner/scanner-state.json \
-  --log-directory /var/log/network-mapping-scanner \
-  --id "$SCANNER_ID" --token "$SCANNER_TOKEN"
-unset SCANNER_TOKEN
+docker compose --env-file docker/.env -f docker/compose.example.yml config --quiet
 docker compose --env-file docker/.env -f docker/compose.example.yml up -d
 ```
 
-CLI 仍通过参数传 Token，注册期间有宿主机进程/容器检查权限的用户可能看到该参数；限制节点管理权限。
-注册成功会保存 SQLite 身份并退出，日常启动不得重复携带注册参数。
-已有节点迁移时先停止原进程，保留完整数据库及对应日志/旧状态；新镜像使用同一状态目录。
-若旧 TOML 含 token/runtime_token，清理秘密使用 rename，需要临时挂载可写的配置目录，
-不能只绑定单个可写 TOML 文件。身份入库并清理后恢复只读配置。
+首次启动自动注册，将运行令牌和注册凭据 SHA-256 摘要一起原子写入 SQLite，然后继续运行。
+容器重启或重建时，如果凭据摘要未变化，直接恢复身份，不再消耗注册 Token。
+更换一次性 Token 后重建容器会重新注册；失败不替换本地身份、不记录成功摘要。
+若服务端已消耗 Token 而响应或本地落盘失败，需要重新签发 Token，注册接口与本地数据库不是跨系统事务。
+注册成功后可以删除 Token；只保留相同 ID 或同时删除注册两项均可继续恢复身份。
+更换 ID 时若有未上传结果会拒绝切换。数据卷丢失或更换服务端地址后，需要重新签发注册凭据。
+运行令牌失效不会触发无限注册重试，应由管理员提供新的一次性 Token。
+
+显式 CLI `--id`/`--token` 仍执行注册后退出；env 自动注册则继续进入正常扫描流程。
+注册参数不写回 `.env`，一次性 Token 明文不写入 SQLite。健康检查不自动注册或更新模板。
+新状态库版本为 4；旧库自动升级并保留身份及待上传结果，旧版本程序不能直接打开升级后的库。
+已有节点迁移时先停止原进程，保留完整数据卷；无需把运行令牌复制进 env。
 
 ## Nuclei 与节点验收
 
-启用漏洞扫描时，将审核、签名、固定版本的模板目录按 Compose 注释只读挂载，设置 enabled=true。
-镜像不下载模板、不安装浏览器、不主动启用 headless/code/OAST。XDG 配置和缓存写入数据卷，
-模板更新、签名与实际 Nuclei 调用约束参见 [Nuclei 文档](NUCLEI.md)。
+镜像内置 masscan、zgrab2、Nuclei 和官方模板，默认无需额外安装或挂载模板。
+`NM__NUCLEI__ENABLED=true` 开启漏洞扫描，`NM__NUCLEI__UPDATE_TEMPLATES=true` 允许正常启动时
+联网更新一次；默认 false，只使用镜像内置或已经缓存的模板。
+内置模板位于 `/opt/nuclei-templates/bundled`，首次启用会复制到 scanner-data 中的可写模板目录。
+新镜像的内置版本变化时会重新初始化；运行时更新在独立暂存目录进行，成功后替换，
+失败或超时保留原模板并报错。模板版本和提交记录在镜像 labels、BUILD-INFO 及模板目录中。
+更新只涉及模板，不升级 Nuclei 二进制；每次实际扫描仍关闭隐式更新，并保留签名和协议限制。
+文件配置的对应开关为 `[nuclei].update_templates`，最长更新时限由 `template_update_timeout_seconds` 控制。
+模块模式使用签名版本化模板包，不能同时启用本地启动更新。完整说明见 [Nuclei 文档](NUCLEI.md)。
 
 CI 从 OCI 产物检查版本/架构/config digest，在隔离 Docker 网络中的一个临时 ES HTTP 端点上验证
 NET_RAW、官方 masscan list 输出和 zgrab2 HTTP 握手，并核对 Nuclei 版本；不扫描外部地址。
@@ -86,7 +98,7 @@ SQLite 上传恢复和审核模板联调。没有周期执行 --health-check：�
 
 `.github/workflows/docker.yml` 在 `main`、`dev`、`dev/**`、`feature/**`、`fix/**`、
 `release/**` 提交以及面向 `main`/`dev` 的 PR 上运行；扫描仓库另外兼容现有 `rust` 分支。
-`workflow_dispatch` 只构建，不发布。工作流文件需先进入远端相应分支，手动入口需在默认 `main` 中存在。
+`workflow_dispatch` 留空版本时只构建；填写 `promote_version` 时只提升已发布镜像的 latest。工作流文件需先进入远端相应分支，手动入口需在默认 `main` 中存在。
 
 两个原生 runner 分别构建 `linux/amd64` 与 `linux/arm64`，Dockerfile 内执行
 `cargo fmt --check`、`cargo clippy --locked --all-targets`、`cargo test --locked` 和 release 构建。

@@ -2,6 +2,7 @@ name: network-mapping-scanner
 services:
   scanner:
     image: ${SCANNER_IMAGE:?Set SCANNER_IMAGE to an approved version or digest}
+    env_file: ./.env
     init: true
     restart: unless-stopped
     network_mode: host
@@ -15,13 +16,12 @@ services:
     stop_signal: SIGINT
     stop_grace_period: 90s
     volumes:
-      - ./runtime/config.toml:/etc/network-mapping-scanner/config.toml:ro
       - scanner-data:/var/lib/network-mapping-scanner
       - scanner-logs:/var/log/network-mapping-scanner
-      # Optional private CA bundle; keep verification enabled in config.toml.
+      # Optional private CA bundle; keep NM__SCANNER__VERIFY_TLS=true.
       # - ./runtime/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
-      # Optional reviewed, signed templates; enable nuclei in config.toml.
-      # - ./runtime/nuclei-templates:/opt/nuclei-templates/safe:ro
+      # Official templates ship in the image. Their writable copy and optional
+      # startup updates live in scanner-data; set NM__NUCLEI__UPDATE_TEMPLATES.
     # Nuclei may use a writable per-user cache even with updates disabled.
     tmpfs: ["/tmp:rw,noexec,nosuid,size=256m", "/root/.cache:rw,noexec,nosuid,size=128m"]
     logging:
