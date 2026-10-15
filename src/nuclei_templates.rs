@@ -9,6 +9,32 @@ use uuid::Uuid;
 
 const REVISION: &str = "NM-BUNDLED-REVISION";
 
+struct TemplateLock(fs::File);
+
+impl TemplateLock {
+    fn acquire(path: &Path) -> Result<Self, ScannerError> {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)?;
+        fs2::FileExt::try_lock_exclusive(&file).map_err(|_| {
+            ScannerError::Config("template directory is being prepared by another process".into())
+        })?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for TemplateLock {
+    fn drop(&mut self) {
+        // flock survives closing this file if a concurrent fork temporarily
+        // inherited its descriptor. Explicitly unlock on every exit, including
+        // errors and cancellation, before closing our copy.
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
 fn copy_tree(source: &Path, destination: &Path) -> Result<usize, ScannerError> {
     fs::create_dir_all(destination)?;
     let mut templates = 0;
@@ -67,15 +93,7 @@ pub(crate) async fn prepare(config: &NucleiConfig) -> Result<(), ScannerError> {
         ScannerError::Config("nuclei.templates_path must name a template directory".into())
     })?;
     fs::create_dir_all(parent)?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(parent.join(format!(".{name}.lock")))?;
-    fs2::FileExt::try_lock_exclusive(&lock).map_err(|_| {
-        ScannerError::Config("template directory is being prepared by another process".into())
-    })?;
+    let _lock = TemplateLock::acquire(&parent.join(format!(".{name}.lock")))?;
     let backup = parent.join(format!(".{name}.previous"));
     // Recover an interrupted directory swap before reading or updating templates.
     if backup.exists() {
@@ -233,6 +251,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn releases_lock_even_when_another_descriptor_is_still_open() {
+        let f = Fixture::new();
+        let path = f.root.join(".active.lock");
+        let lock = TemplateLock::acquire(&path).unwrap();
+        // A clone shares the same open file description as a descriptor
+        // inherited by a child between fork and exec.
+        let inherited = lock.0.try_clone().unwrap();
+        assert!(TemplateLock::acquire(&path).is_err());
+        drop(lock);
+        let next = TemplateLock::acquire(&path).unwrap();
+        assert!(TemplateLock::acquire(&path).is_err());
+        drop(inherited);
+        assert!(TemplateLock::acquire(&path).is_err());
+        drop(next);
+        TemplateLock::acquire(&path).unwrap();
+    }
+
     #[tokio::test]
     async fn disabled_does_not_write_or_run_engine() {
         let mut f = Fixture::new();
@@ -299,12 +335,10 @@ mod tests {
         f.config.update_templates = true;
         f.config.template_update_timeout_seconds = 1;
         f.engine("exec sleep 30");
+        let error = prepare(&f.config).await.unwrap_err();
         assert!(
-            prepare(&f.config)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("timed out")
+            error.to_string().contains("timed out"),
+            "expected template update timeout, got: {error:?}"
         );
         assert_eq!(
             fs::read_to_string(f.active().join("fixture.yaml")).unwrap(),
