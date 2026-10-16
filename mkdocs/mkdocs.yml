@@ -1,0 +1,75 @@
+site_name: Network Mapping Scanner Documation
+site_description: 网络测绘系统扫描器技术文档
+site_url: https://blog.abdc.world
+
+docs_dir: ../docs
+site_dir: site
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.action.edit    # 加上这个
+    - content.action.view    # 可选，查看源文件
+
+validation:
+  links:
+    absolute_links: relative_to_docs
+    not_found: warn
+    anchors: warn
+    unrecognized_links: warn
+
+plugins:
+  - search
+
+nav:
+  - 首页: 
+    - README: README.md
+    - 使用: USAGE.md
+  - 部署指南:
+    - 直接部署: DEPLOYMENT.md
+    - DOCKER部署: DOCKER.md
+  - 诊断: DIAGNOSTICS.md
+
+hooks:
+  - hooks.py
+
+repo_url: https://github.com/wshijiang/Network-Mapping-Scanner
+repo_name: wshijiang/Network-Mapping-Scanner
+edit_uri: edit/mkdocs/docs/
+
+markdown_extensions:
+#开启 mermaid插件
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  #保留中文，避免文档内部的锚链接失效
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+
+extra:
+  # 页脚右侧图标
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/wshijiang/Network-Mapping-Scanner
+      name: GitHub 源代码
+
+    - icon: fontawesome/solid/globe
+      link: https://blog.abdc.world
+      name: 博客
+
+
+# 版权信息
+copyright: >
+  Copyright &copy; 2026 Network Mapping Project.
+  All rights reserved.
+  <br>
