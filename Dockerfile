@@ -41,7 +41,7 @@ RUN cargo clippy --locked --all-targets
 RUN cargo test --locked --all-targets
 RUN cargo build --locked --release --bins && mkdir /out && install -m 0755 target/release/scanner-rs target/release/scanner-worker target/release/scanner-package /out/
 
-FROM golang:1.26.8-bookworm@sha256:dc9ad6c05acc7a88e5b71bde60a5fe3bd4b9f0db209011711b464107438a8107 AS tools-builder
+FROM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS tools-builder
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpcap-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /tools
