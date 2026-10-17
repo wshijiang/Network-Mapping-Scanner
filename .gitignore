@@ -26,3 +26,8 @@ trusted-update-keys.json
 /docker/.env
 /_frontend/
 /docker/__pycache__/
+
+# MkDocs preview environment and generated site
+/.venv-docs/
+/mkdocs/site/
+/mkdocs/__pycache__/

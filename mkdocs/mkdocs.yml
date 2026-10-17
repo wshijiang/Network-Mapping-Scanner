@@ -1,4 +1,4 @@
-site_name: Network Mapping Scanner Documation
+site_name: Network Mapping Scanner 文档
 site_description: 网络测绘系统扫描器技术文档
 site_url: https://blog.abdc.world
 
@@ -12,11 +12,16 @@ theme:
     - navigation.tabs
     - navigation.sections
     - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
     - content.code.copy
     - content.action.edit    # 加上这个
     - content.action.view    # 可选，查看源文件
 
 validation:
+  nav:
+    omitted_files: warn
   links:
     absolute_links: relative_to_docs
     not_found: warn
@@ -24,16 +29,31 @@ validation:
     unrecognized_links: warn
 
 plugins:
-  - search
+  - search:
+      lang:
+        - zh
+        - en
 
 nav:
-  - 首页: 
-    - README: README.md
-    - 使用: USAGE.md
-  - 部署指南:
-    - 直接部署: DEPLOYMENT.md
-    - DOCKER部署: DOCKER.md
-  - 诊断: DIAGNOSTICS.md
+  - 文档首页: README.md
+  - 入门部署:
+      - 部署选型与原生安装: DEPLOYMENT.md
+      - Docker 部署: DOCKER.md
+      - 启动配置检查: CONFIG_CHECK.md
+  - 配置与引擎:
+      - 配置与使用: USAGE.md
+      - masscan 适配与迁移: MASSCAN.md
+      - Nuclei 部署与运维: NUCLEI.md
+      - 目标执行反馈: PERFORMANCE.md
+  - 运维排障:
+      - 扫描与上传恢复: recovery.md
+      - 扫描缓存管理: CACHE_MANAGEMENT.md
+      - 远程诊断与日志: DIAGNOSTICS.md
+      - 模块执行与热更新: MODULE_UPDATES.md
+  - 开发参考:
+      - 扫描器维护参考: MAINTENANCE.md
+      - 模块化与热更新设计: MODULAR_HOT_UPDATE_DESIGN.md
+      - 文档维护与本地预览: DOCUMENTATION.md
 
 hooks:
   - hooks.py
