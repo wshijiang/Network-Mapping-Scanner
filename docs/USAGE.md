@@ -46,6 +46,17 @@ max_result_bytes = 65536
 - zgrab2 使用系统 TCP 栈，`senders` 和 `server_rate_limit` 应从较低值开始压测，不能照搬
   masscan 的发包速率。
 
+## 操作系统特征采集
+
+操作系统推断由服务端完成，节点继续使用已有 zgrab2 服务识别阶段，不增加扫描端口或探测
+连接。选中的握手信息随 `ServiceObservation.data` 上传；普通 OpenSSH、nginx、SMB/RDP
+连接成功等信息不足时，服务端会保留未知。
+
+当证书或其他扩展使握手超出 `max_result_bytes` 时，节点会在同一 JSON 大小预算内尽量
+保留 SSH 标识、HTTP Server 头和明确的系统字段，并标记 `evidence[].truncated`。
+截断记录不能代替完整证据；历史字段缺失时需重新执行服务识别。
+查看结果、置信度及边界见服务端[操作系统识别说明](https://github.com/wshijiang/network-mapping/blob/main/docs/OS_DETECTION.md)。
+
 ## 漏洞扫描
 
 漏洞扫描默认关闭。节点安装 Nuclei 后，应将 `templates_path` 指向经过审核并固定版本的模板

@@ -837,3 +837,14 @@ DEBUG 日志覆盖配置加载、启动模式、任务 HTTP 状态、任务上�
 | `thiserror` | 错误类型 derive |
 
 依赖版本与功能特性以 `Cargo.toml` 为准。
+
+## 操作系统证据维护
+
+`src/scan/engines/zgrab2.rs::bounded_detail` 在整体握手超限时提取已知的小型字段，
+`src/scan/detection.rs::retained_handshake` 将截断标识与选中的应用证据一起上传。
+该操作不增加探测连接，不从端口号推断系统，不改变服务识别得分含义。
+
+紧凑字段保持原始 JSON 路径，逐项检查序列化后的大小；响应头统一保留为 `server` 数组。
+新增字段应同步服务端协议适配与固定样本，不能把未知字段名或软件包版本当作系统版本。
+回归检查：`cargo test --locked scan::engines::zgrab2`，并检查上传批次大小约束。
+服务端规则、权限和历史重算见[识别维护说明](https://github.com/wshijiang/network-mapping/blob/main/docs/OS_DETECTION_DEVELOPMENT.md)。
