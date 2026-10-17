@@ -361,6 +361,7 @@ fn retained_handshake(item: &ProbeEvidence) -> Value {
         "role": role,
         "module": item.module,
         "result": result,
+        "truncated": item.detail.get("truncated").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 

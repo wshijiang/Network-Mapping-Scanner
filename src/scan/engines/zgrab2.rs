@@ -654,12 +654,79 @@ fn bounded_detail(module_data: &Value, max_result_bytes: usize) -> Value {
         }
     }
 
-    json!({
-        "status": module_data.get("status"),
-        "error": module_data.get("error"),
+    let mut summary = json!({
+        "status": module_data.get("status").and_then(Value::as_str).map(|s|s.chars().take(32).collect::<String>()),
+        "error": module_data.get("error").and_then(Value::as_str).map(|s|s.chars().take(64).collect::<String>()),
         "truncated": true,
         "original_bytes": serialized_bytes,
-    })
+        "result": {},
+    });
+    // A large certificate or protocol extension must not discard the small
+    // platform fields needed by server-side inference. Keep original paths and
+    // fit every addition to the same JSON byte budget.
+    for path in [
+        "/banner",
+        "/server_id/raw",
+        "/server_id/software",
+        "/native_os",
+        "/smb/native_os",
+        "/session_setup/native_os",
+        "/server_os",
+    ] {
+        if let Some(text) = module_data
+            .pointer(&format!("/result{path}"))
+            .and_then(Value::as_str)
+        {
+            retain_compact_field(
+                &mut summary,
+                path,
+                json!(text.chars().take(256).collect::<String>()),
+                max_result_bytes,
+            );
+        }
+    }
+    if let Some(headers) = module_data
+        .pointer("/result/response/headers")
+        .and_then(Value::as_object)
+    {
+        for (name, value) in headers {
+            if !name.eq_ignore_ascii_case("server") {
+                continue;
+            }
+            let values: Vec<String> = if let Some(text) = value.as_str() {
+                vec![text.chars().take(128).collect()]
+            } else {
+                value
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .take(2)
+                    .filter_map(Value::as_str)
+                    .map(|s| s.chars().take(128).collect())
+                    .collect()
+            };
+            retain_compact_field(
+                &mut summary,
+                "/response/headers/server",
+                json!(values),
+                max_result_bytes,
+            );
+        }
+    }
+    summary
+}
+
+fn retain_compact_field(summary: &mut Value, path: &str, value: Value, budget: usize) {
+    let previous = summary.clone();
+    let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+    let mut target = &mut summary["result"];
+    for part in &parts[..parts.len() - 1] {
+        target = &mut target[*part];
+    }
+    target[parts[parts.len() - 1]] = value;
+    if serde_json::to_vec(&*summary).map_or(true, |bytes| bytes.len() > budget) {
+        *summary = previous;
+    }
 }
 
 struct TempZgrabConfig {
@@ -1192,5 +1259,28 @@ done
         let detail = bounded_detail(&module_data, 1024);
         assert_eq!(detail["result"]["response"]["body"], "binary");
         assert_eq!(detail["result"]["banner"], "telnetbanner");
+    }
+    #[test]
+    fn oversized_handshakes_keep_platform_fields_within_budget() {
+        let cases = [
+            (
+                json!({"server_id":{"raw":"SSH-2.0-OpenSSH_9.6 Ubuntu-3ubuntu0.11"},"extensions":"x".repeat(9000)}),
+                "/result/server_id/raw",
+            ),
+            (
+                json!({"response":{"headers":{"Server":["Microsoft-IIS/10.0"]},"body":"small"},"certificate":"x".repeat(9000)}),
+                "/result/response/headers/server/0",
+            ),
+            (
+                json!({"native_os":"Windows Server 2019","extra":"x".repeat(9000)}),
+                "/result/native_os",
+            ),
+        ];
+        for (result, path) in cases {
+            let detail = bounded_detail(&json!({"status":"success","result":result}), 1024);
+            assert_eq!(detail["truncated"], true);
+            assert!(detail.pointer(path).and_then(Value::as_str).is_some());
+            assert!(serde_json::to_vec(&detail).unwrap().len() <= 1024);
+        }
     }
 }
