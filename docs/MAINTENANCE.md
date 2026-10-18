@@ -153,7 +153,8 @@ TLS 参数。
 - 每个端点只保留最终服务关联的 `evidence`，不上传完整探测尝试和候选列表；
 - 应用模块根级结果已经包含 `tls` 时只保存一份应用握手，HTTPS 才额外关联独立 TLS；
 - 超时、拒绝或协议错误：`service` 保持为空，只保留探测次数，不保存所有失败详情；
-- 详细数据超过 `max_result_bytes`：只保留状态、错误、原大小和 `truncated=true`。
+- 详细数据超过 `max_result_bytes`：HTTP 优先裁剪正文并保留握手；仍超限时保留状态、
+  错误、原大小及预算内的系统字段。两条路径均上报 `evidence[].truncated=true`。
 
 已知隐式 TLS 端口优先执行应用协议：465 → SMTPS、990 → FTPS、993 → IMAPS、
 995 → POP3S、8883 → MQTTS。636（LDAPS）、853（DNS over TLS）以及 989（FTPS
@@ -842,6 +843,7 @@ DEBUG 日志覆盖配置加载、启动模式、任务 HTTP 状态、任务上�
 
 `src/scan/engines/zgrab2.rs::bounded_detail` 在整体握手超限时提取已知的小型字段，
 `src/scan/detection.rs::retained_handshake` 将截断标识与选中的应用证据一起上传。
+该标识同时读取整体 `truncated` 和 HTTP `response.body_truncated`，仅裁剪正文也视为不完整握手。
 该操作不增加探测连接，不从端口号推断系统，不改变服务识别得分含义。
 
 紧凑字段保持原始 JSON 路径，逐项检查序列化后的大小；响应头统一保留为 `server` 数组。

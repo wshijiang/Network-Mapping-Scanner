@@ -54,6 +54,7 @@ max_result_bytes = 65536
 
 当证书或其他扩展使握手超出 `max_result_bytes` 时，节点会在同一 JSON 大小预算内尽量
 保留 SSH 标识、HTTP Server 头和明确的系统字段，并标记 `evidence[].truncated`。
+HTTP 仅裁剪正文而保留其余握手时，同样标记为截断。
 截断记录不能代替完整证据；历史字段缺失时需重新执行服务识别。
 查看结果、置信度及边界见服务端[操作系统识别说明](https://github.com/wshijiang/network-mapping/blob/main/docs/OS_DETECTION.md)。
 

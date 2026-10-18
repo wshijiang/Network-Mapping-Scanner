@@ -357,11 +357,17 @@ fn retained_handshake(item: &ProbeEvidence) -> Value {
         .get("result")
         .cloned()
         .unwrap_or_else(|| item.detail.clone());
+    let truncated = item.detail.get("truncated").and_then(Value::as_bool) == Some(true)
+        || (matches!(item.module.as_str(), "http" | "https")
+            && result
+                .pointer("/response/body_truncated")
+                .and_then(Value::as_bool)
+                == Some(true));
     json!({
         "role": role,
         "module": item.module,
         "result": result,
-        "truncated": item.detail.get("truncated").and_then(Value::as_bool).unwrap_or(false),
+        "truncated": truncated,
     })
 }
 

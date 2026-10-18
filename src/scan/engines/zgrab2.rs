@@ -1089,6 +1089,10 @@ mod tests {
             let observations = aggregate(&probes, &ServiceDetectionConfig::default());
             assert_eq!(observations[0].service.as_deref(), Some("https"));
             assert_eq!(
+                observations[0].data.as_ref().unwrap()["evidence"][0]["truncated"],
+                true
+            );
+            assert_eq!(
                 observations[0]
                     .data
                     .as_ref()
