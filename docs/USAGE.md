@@ -10,6 +10,10 @@
 
 标准 masscan 的输出模式、参数与切换步骤见[masscan 标准输出适配与迁移](MASSCAN.md)。旧配置默认使用兼容模式，迁移时显式设置 `scanner.masscan_output_mode = "standard_list"`。
 
+## UDP 扩展状态
+
+本批新增 DNS/NTP/STUN 库内核，但尚未开放 UDP 任务或 CLI 配置，现有服务任务仍只识别 TCP。服务端端点身份与能力协商完成后再接入，详见 [UDP 探测](UDP_DETECTION.md)。不要使用 U: 前缀绕过当前任务端口校验。
+
 ## 服务识别
 
 普通扫描需要安装 `masscan`；服务识别还需要 `zgrab2`。masscan 只负责发现开放端口，zgrab2

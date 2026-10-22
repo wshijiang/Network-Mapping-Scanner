@@ -2,6 +2,12 @@
 
 [文档中心](README.md) · [部署与升级](DEPLOYMENT.md) · [服务端更新日志](https://github.com/wshijiang/network-mapping/blob/main/docs/CHANGELOG.md)
 
+## 未发布：服务探测第一批（2026-10-22）
+
+- 新增 DNS/NTP/STUN UDP 单播探测库内核，具备事务匹配、连接式来源过滤、超时重试、取消、报文大小和无效响应预算。
+- 仅有效协议响应生成识别结果；超时不判定关闭，证据不保留返回地址、名称或原始报文。
+- 本批没有接入任务/CLI，也未上报 UDP 能力；线上 UDP 需后续先完成任务协商和服务端协议端点迁移。详见 [UDP 探测](UDP_DETECTION.md)及跨仓库分批计划。
+
 ## 未发布（自 v0.1.20 以来）
 
 截至 **2026-10-21（北京时间）**，以最新已发布 tag [v0.1.20](https://github.com/wshijiang/Network-Mapping-Scanner/releases/tag/v0.1.20) 为基线，汇总主分支已合入的扫描端变动。

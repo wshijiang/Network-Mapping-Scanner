@@ -35,6 +35,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [配置与使用](USAGE.md) | 扫描模式、引擎配置、远程参数、重连和双栈探测 |
+| [UDP 探测内核与后续接入](UDP_DETECTION.md) | 当前 DNS/NTP/STUN 库 API、验证与未开放的任务链路 |
 | [masscan 适配与迁移](MASSCAN.md) | 官方 list 输出、兼容模式、切换验证和回滚 |
 | [Nuclei 部署与运维](NUCLEI.md) | 模板治理、参数语义、结果协议和上线检查 |
 | [目标执行反馈](PERFORMANCE.md) | 连接采样、失败分类与兼容升级 |
