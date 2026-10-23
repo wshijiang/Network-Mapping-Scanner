@@ -470,8 +470,8 @@ pub(crate) struct ServiceDetectionConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ServiceDetectionStrategy {
-    #[default]
     Standard,
+    #[default]
     Adaptive,
     Exhaustive,
 }
@@ -496,7 +496,7 @@ impl Default for ServiceDetectionConfig {
             max_runtime_seconds: default_service_runtime(),
             enabled: false,
             required: false,
-            strategy: ServiceDetectionStrategy::Standard,
+            strategy: ServiceDetectionStrategy::Adaptive,
             max_probes_per_endpoint: 8,
             confidence_threshold: 80,
             zgrab_path: "zgrab2".into(),

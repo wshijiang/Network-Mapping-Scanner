@@ -6,6 +6,8 @@
 
 第一批新增公开 `scanner_rs::udp_probe` 库 API，包含 DNS、NTP、STUN 定向单播探测。该库保持独立；当前另有原生引擎通过 plan v2 将 DNS、EtherNet/IP、BACnet 单播及受限实时流量被动接收接入任务。须配套更新服务端并完成端点投影迁移，详见[服务协议识别与部署](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。NTP/STUN 尚未接入任务，不能据此声明可下发扫描。
 
+UDP 主动任务自动尝试 DNS、EtherNet/IP ListIdentity 和 BACnet/IP（仅 IPv4）；被动任务自动解析支持的 EtherNet/IP I/O 与 OPC UA UADP 帧，无需手动勾选协议。服务端将默认协议集写入 plan，节点能力和预算仍按该集合校验；主动/被动任务保持分离，目标、端口和接收窗口仍需明确配置。
+
 ## 协议范围
 
 | 协议 | 请求 | 响应关联与证据 |
@@ -34,9 +36,9 @@
 
 ## 后续批次
 
-DNS TCP/UDP、DoH、DoT 与 VNC 的专项范围和实施顺序见 [服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md)。DNS UDP 仍须完成下述端点迁移和任务协商；DoH/DoT 属于 TCP 上的加密应用识别，不能通过开启 UDP 库 API 获得。该计划的 TCP 首批已接入，但 UDP 仍待实现，不改变本页库 API 的交付范围。
+DNS TCP/UDP、DoH、DoT 与 VNC 的专项范围和实施顺序见 [服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md)。DNS UDP 仍须完成下述端点迁移和任务协商；DoH/DoT 属于 TCP 上的加密应用识别，不能通过开启 UDP 库 API 获得。该计划的 TCP 首批已接入，UDP 任务现已接入 plan v2，不改变本页独立库 API 的交付范围。
 
-工业扩展见[工业与物联网服务识别计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md)：EtherNet/IP UDP/44818 和 BACnet/IP UDP/47808 计划为单播请求/响应；OPC UA UDP PubSub 与 EtherNet/IP UDP/2222 I/O 单独规划被动观察及其能力/数据契约，不向实时 I/O 端口发送探测数据。上述协议均尚未加入当前库或线上任务。
+工业扩展见[工业与物联网服务识别计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md)：EtherNet/IP UDP/44818 和 BACnet/IP UDP/47808 计划为单播请求/响应；OPC UA UDP PubSub 与 EtherNet/IP UDP/2222 I/O 单独规划被动观察及其能力/数据契约，不向实时 I/O 端口发送探测数据。上述 DNS/EtherNet/IP/BACnet 主动和受限被动协议现已接入 plan v2 任务，精确范围以完整支持矩阵为准；本页的独立公开库 API 与任务引擎分别维护。
 
 第二批先修改服务端 `(scope, IP, port)` 端点身份，加入 tcp/udp，迁移投影和历史证据关联；再加入 port_sets、节点能力、任务恢复、速率和 daisyUI 入口。不能仅删除当前 TCP 过滤条件就开启 UDP。第三批加入 Elasticsearch 原生明文/TLS Transport；第四批扩展 SNMP、NBNS、RPCbind、TFTP、SQL Browser、Memcached、SIP、CoAP，再处理 QUIC/DTLS、发现和专项协议。
 

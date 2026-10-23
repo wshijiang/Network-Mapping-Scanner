@@ -2,6 +2,12 @@
 
 [文档中心](README.md) · [部署与升级](DEPLOYMENT.md) · [服务端更新日志](https://github.com/wshijiang/network-mapping/blob/main/docs/CHANGELOG.md)
 
+## 未发布：全部服务自动识别（2026-10-23）
+
+- 默认识别策略为 adaptive，所有已实现 TCP 协议进入自动候选；补齐工业端口映射和工业回退/full exhaustive，HTTPS 自动细分 DoH，完整 RFB Banner 可确认非标准端口 VNC。
+- 保留节点探测预算、阶段期限和 TLS 校验；TCP 无需 required_services，UDP 默认协议由服务端规范化后下发，IPv6 不尝试经典 BACnet/IP。
+- 增加全模块默认端口覆盖、工业回退、HTTPS→DoH 细分与预算、RFB 正反例回归。
+
 ## 未发布：PR review 与 CI 核验修复（2026-10-23）
 
 - 远程 CI 暴露诊断存储立即重开的偶发锁冲突；阻塞数据库调用在返回完成前显式释放捕获的 Store，并增加多线程连续重开回归，不增加重试或忽略失败。

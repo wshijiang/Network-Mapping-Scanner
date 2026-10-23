@@ -718,6 +718,7 @@ done
             required: true,
             batch_endpoints: 1,
             zgrab_path: zgrab.to_string_lossy().into_owned(),
+            strategy: crate::types::ServiceDetectionStrategy::Standard,
             ..Default::default()
         };
         let plan = super::ScanPlan::legacy(&service);

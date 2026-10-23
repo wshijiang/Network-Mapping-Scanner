@@ -1226,6 +1226,7 @@ done
         let config = ServiceDetectionConfig {
             enabled: true,
             zgrab_path: path.to_string_lossy().into_owned(),
+            strategy: crate::types::ServiceDetectionStrategy::Standard,
             ..ServiceDetectionConfig::default()
         };
         let outcome = run(

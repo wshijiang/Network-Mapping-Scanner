@@ -245,7 +245,9 @@ pub(crate) async fn run(
                 ));
             }
             if service == "bacnet" && ip.is_ipv6() {
-                return Err(invalid("classic BACnet/IP requires IPv4"));
+                // Automatic inventory includes BACnet/IP, whose classic
+                // transport applies only to IPv4 endpoints.
+                continue;
             }
             let end =
                 deadline.min(Instant::now() + Duration::from_secs(config.target_timeout_seconds));
