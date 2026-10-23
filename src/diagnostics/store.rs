@@ -104,11 +104,17 @@ impl Store {
     ) -> Result<T> {
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
-            let mut inner = this
-                .inner
-                .lock()
-                .map_err(|_| "diagnostics_database_poisoned")?;
-            f(&mut inner.db, &this.scope)
+            let result = {
+                let mut inner = this
+                    .inner
+                    .lock()
+                    .map_err(|_| "diagnostics_database_poisoned")?;
+                f(&mut inner.db, &this.scope)
+            };
+            // Drop the captured Store before Tokio publishes task completion.
+            // Otherwise a caller may reopen while this task still owns the lock.
+            drop(this);
+            result
         })
         .await?
     }
@@ -339,6 +345,20 @@ mod tests {
         assert!(store.next_job().await.unwrap().is_none());
         assert!(store.pending_file_ids().await.unwrap().is_empty());
         drop(store);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(path.with_extension("lock")).unwrap();
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn completed_blocking_call_releases_its_store_before_immediate_reopen() {
+        let path =
+            std::env::temp_dir().join(format!("diagnostic-release-{}.sqlite3", Uuid::now_v7()));
+        let scanner = Uuid::now_v7();
+        for _ in 0..128 {
+            let store = Store::open(path.clone(), "https://example.test", scanner).unwrap();
+            store.call(|_, _| Ok(())).await.unwrap();
+            assert_eq!(Arc::strong_count(&store.inner), 1);
+            drop(store);
+        }
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(path.with_extension("lock")).unwrap();
     }
