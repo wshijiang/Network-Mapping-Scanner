@@ -303,7 +303,22 @@ pub(crate) async fn run(
     }
     let mut bytes = [0; 8193];
     let mut results = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    // This receiver uses one cursor: each acknowledged payload must therefore
+    // contain the whole snapshot, including evidence recovered after restart.
+    let mut snapshot:Vec<ScanObservation>=journal.as_ref().map(|j|j.state.observations.iter().filter(|o|matches!(o,ScanObservation::Service(s) if s.source=="passive_udp" && s.protocol=="udp")).cloned().collect()).unwrap_or_default();
+    let mut seen: std::collections::HashSet<_> = snapshot
+        .iter()
+        .filter_map(|o| {
+            if let ScanObservation::Service(s) = o {
+                Some((
+                    std::net::SocketAddr::new(s.ip.parse().ok()?, s.port),
+                    s.service.clone()?,
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
     let mut datagrams = 0;
     let mut checkpoint_at = Instant::now();
     while datagrams < 1024 {
@@ -360,12 +375,13 @@ pub(crate) async fn run(
                         json!({"schema_version":2,"confidence":80,"selected_probe":service,"evidence":[{"role":"passive_protocol","module":service,"result":value,"truncated":false}]}),
                     ),
                 };
+                snapshot.push(ScanObservation::Service(s.clone()));
                 if let Some(j) = journal.as_mut() {
                     j.save(
                         j.state.stage,
                         0,
                         prior + start.elapsed().as_millis() as u64,
-                        Some(&[ScanObservation::Service(s.clone())]),
+                        Some(&snapshot),
                     )?;
                 }
                 results.push(s);
@@ -484,5 +500,77 @@ mod tests {
         assert!(validate_options(&o).is_ok());
         o.passive_window_seconds = Some(61);
         assert!(validate_options(&o).is_err());
+    }
+    #[tokio::test]
+    async fn checkpoint_preserves_multiple_sources_across_restarts() {
+        let reservation = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let senders = [
+            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+        ];
+        let config = ServiceDetectionConfig {
+            required_services: vec!["enip_io".into()],
+            probe_options: ServiceProbeOptions {
+                passive_bind: Some("127.0.0.1".into()),
+                passive_window_seconds: Some(2),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let ports = [PortObservation {
+            ip: "127.0.0.1".into(),
+            port,
+            protocol: "udp".into(),
+            state: "unknown".into(),
+            source: "udp_target".into(),
+            observed_at: 0,
+        }];
+        let path =
+            std::env::temp_dir().join(format!("passive-recovery-{}.sqlite3", uuid::Uuid::new_v4()));
+        let key = format!("{}|configuration", uuid::Uuid::new_v4());
+        let frame = [
+            2, 0, 2, 0x80, 8, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0xb1, 0, 2, 0, 0, 0,
+        ];
+        for (iteration, indices) in [vec![0, 1], vec![0, 2]].iter().enumerate() {
+            let store = crate::storage::StateStore::open(path.clone()).unwrap();
+            let mut journal =
+                crate::journal::ScanJournal::open(&store, "origin", key.clone()).unwrap();
+            let cancel = AtomicBool::new(false);
+            let receive = run(&config, &ports, &cancel, Some(&mut journal));
+            let send = async {
+                sleep(Duration::from_millis(30)).await;
+                for &index in indices {
+                    senders[index]
+                        .send_to(&frame, ("127.0.0.1", port))
+                        .await
+                        .unwrap();
+                }
+                sleep(Duration::from_millis(60)).await;
+                cancel.store(true, Ordering::Relaxed);
+            };
+            let (result, ()) = tokio::join!(receive, send);
+            assert!(matches!(result.unwrap(), EngineOutcome::Cancelled));
+            drop(journal);
+            drop(store);
+            let reopened = crate::storage::StateStore::open(path.clone()).unwrap();
+            let state = reopened.load_checkpoint("origin", &key).unwrap().unwrap();
+            assert_eq!(state.observations.len(), iteration + 2);
+            let found: std::collections::HashSet<_> = state
+                .observations
+                .iter()
+                .map(|o| {
+                    if let ScanObservation::Service(s) = o {
+                        s.port
+                    } else {
+                        panic!("unexpected checkpoint kind")
+                    }
+                })
+                .collect();
+            assert_eq!(found.len(), iteration + 2);
+        }
+        std::fs::remove_file(path).unwrap();
     }
 }

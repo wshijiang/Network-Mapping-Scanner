@@ -2,6 +2,12 @@
 
 [文档中心](README.md) · [部署与升级](DEPLOYMENT.md) · [服务端更新日志](https://github.com/wshijiang/network-mapping/blob/main/docs/CHANGELOG.md)
 
+## 未发布：PR review 与 CI 核验修复（2026-10-23）
+
+- 核实 PR #91 的检查点与期限意见：被动接收改为在固定游标保存包含恢复结果的累计快照，并恢复已观察来源的去重集合，避免多条 ACK 证据被覆盖。
+- 原生 TCP 与 UDP 探测在接受末次结果时重新检查阶段期限；UDP 阶段耗尽不再提交端点完成游标或返回成功。
+- 增加跨重启多来源恢复、原生期限竞争及末端 UDP 超时回归。旧 IPC fixture 意见已由上一提交配套 IPC 3 修复，本轮核对保留。
+
 ## 未发布：加密 DNS、工业与 UDP 服务识别（2026-10-23）
 
 - 增加默认验证证书的 DoT/DoH 原生识别，固定目标 IP、合法 SNI/路径、公开 CA；普通 HTTPS/HTML、重定向和不匹配 DNS 不确认 DoH。

@@ -254,6 +254,20 @@ pub(crate) async fn run(
             let result = loop {
                 tokio::select! { result=&mut future=>break result, _=sleep(Duration::from_millis(20))=>{if cancel.load(Ordering::Relaxed){return Ok(EngineOutcome::Cancelled);}}}
             };
+            if Instant::now() >= deadline {
+                if let Some(j) = journal.as_mut() {
+                    j.save(
+                        j.state.stage,
+                        index,
+                        prior + start.elapsed().as_millis() as u64,
+                        None,
+                    )?;
+                }
+                return Ok(EngineOutcome::Partial(
+                    results,
+                    "udp_inventory_runtime_exceeded".into(),
+                ));
+            }
             if let Ok(Some(result)) = result {
                 let name = match service.as_str() {
                     "dns_udp" => "dns",
@@ -356,5 +370,39 @@ mod tests {
             assert_eq!(v.is_some(), !bad);
             peer.await.unwrap();
         }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn final_udp_timeout_exhausts_stage_without_committing_endpoint() {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let ports = targets(&TargetParams {
+            ip: "127.0.0.1".into(),
+            port: socket.local_addr().unwrap().port().to_string(),
+            rate: 1,
+            address_family: "ipv4".into(),
+        })
+        .unwrap();
+        let config = ServiceDetectionConfig {
+            required_services: vec!["dns_udp".into()],
+            max_runtime_seconds: 1,
+            target_timeout_seconds: 10,
+            ..Default::default()
+        };
+        let path = std::env::temp_dir().join(format!("udp-stage-{}.sqlite3", uuid::Uuid::new_v4()));
+        let store = crate::storage::StateStore::open(path.clone()).unwrap();
+        let key = format!("{}|configuration", uuid::Uuid::new_v4());
+        let mut journal = crate::journal::ScanJournal::open(&store, "origin", key.clone()).unwrap();
+        let result = run(&config, &ports, &AtomicBool::new(false), Some(&mut journal))
+            .await
+            .unwrap();
+        assert!(
+            matches!(result,EngineOutcome::Partial(_,ref reason) if reason=="udp_inventory_runtime_exceeded")
+        );
+        let state = store.load_checkpoint("origin", &key).unwrap().unwrap();
+        assert_eq!(state.chunk, 0);
+        assert!(state.elapsed_ms >= 1000);
+        assert!(state.observations.is_empty());
+        drop(journal);
+        drop(store);
+        std::fs::remove_file(path).unwrap();
     }
 }

@@ -319,6 +319,17 @@ async fn run_attempts(
             }
         };
         evidence.push(result);
+        // The probe and scheduler timers may both become ready at the stage
+        // deadline. Completion cannot turn stage expiry into a target timeout.
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(ProcessOutcome::Cancelled);
+        }
+        if Instant::now() >= deadline {
+            return Ok(ProcessOutcome::TimedOut(
+                evidence,
+                "service_detection_runtime_exceeded",
+            ));
+        }
         if evidence.len().is_multiple_of(100) {
             tracing::info!(
                 event = "ServiceDetectionProgress",
@@ -1339,6 +1350,36 @@ done
             assert_eq!(detail["truncated"], true);
             assert!(detail.pointer(path).and_then(Value::as_str).is_some());
             assert!(serde_json::to_vec(&detail).unwrap().len() <= 1024);
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn native_probe_cannot_complete_after_the_stage_deadline() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let a = ProbeAttempt {
+            ip: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+            probe: ProbeKind::Vnc,
+        };
+        let config = ServiceDetectionConfig {
+            server_rate_limit: 1000,
+            target_timeout_seconds: 10,
+            ..Default::default()
+        };
+        for _ in 0..16 {
+            let deadline = Instant::now() + Duration::from_millis(30);
+            let result = run_attempts(
+                &config,
+                std::slice::from_ref(&a),
+                "ipv4",
+                &AtomicBool::new(false),
+                deadline,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                result,
+                ProcessOutcome::TimedOut(_, "service_detection_runtime_exceeded")
+            ));
         }
     }
 }
