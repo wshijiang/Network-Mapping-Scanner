@@ -14,7 +14,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 reqwest = { version = "0.13", features = ["json"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
-hickory-resolver = { version = "0.25", features = ["system-config"] }
+hickory-resolver = { version = "0.26", features = ["system-config"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 tracing-appender = "0.2"
