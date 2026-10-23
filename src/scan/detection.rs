@@ -28,10 +28,14 @@ pub(crate) enum ProbeKind {
     Memcached,
     Mongodb,
     Banner,
+    Dns,
+    Vnc,
 }
 
 impl ProbeKind {
-    pub(crate) const ALL: [Self; 23] = [
+    pub(crate) const ALL: [Self; 25] = [
+        Self::Dns,
+        Self::Vnc,
         Self::Banner,
         Self::Tls,
         Self::Http,
@@ -57,7 +61,7 @@ impl ProbeKind {
         Self::Imaps,
     ];
 
-    const ADAPTIVE_FALLBACK: [Self; 14] = [
+    const ADAPTIVE_FALLBACK: [Self; 16] = [
         Self::Redis,
         Self::Mysql,
         Self::Postgres,
@@ -66,6 +70,8 @@ impl ProbeKind {
         Self::Smb,
         Self::Rdp,
         Self::Memcached,
+        Self::Dns,
+        Self::Vnc,
         Self::Ssh,
         Self::Ftp,
         Self::Telnet,
@@ -107,6 +113,8 @@ impl ProbeKind {
             Self::Memcached => "memcached",
             Self::Mongodb => "mongodb",
             Self::Banner => "banner",
+            Self::Dns => "dns",
+            Self::Vnc => "vnc",
         }
     }
 
@@ -124,6 +132,8 @@ impl ProbeKind {
 
     pub(crate) fn default_port(self) -> u16 {
         match self {
+            Self::Dns => 53,
+            Self::Vnc => 5900,
             Self::Ftp => 21,
             Self::Ftps => 990,
             Self::Ssh => 22,
@@ -159,6 +169,10 @@ impl ProbeKind {
             Self::Mqtts => "tls=true\n",
             _ => "",
         }
+    }
+
+    pub(crate) fn is_native(self) -> bool {
+        matches!(self, Self::Dns | Self::Vnc)
     }
 
     fn from_name(name: &str) -> Option<Self> {
@@ -202,22 +216,30 @@ pub(crate) fn initial_attempts(
     let endpoints = unique_tcp_endpoints(open_ports);
     let mut attempts = Vec::new();
     for (ip, port) in endpoints {
-        let probes = match config.strategy {
-            ServiceDetectionStrategy::Standard => vec![primary_probe(port)],
-            ServiceDetectionStrategy::Adaptive => {
-                let mut probes = vec![primary_probe(port)];
-                for probe in [
-                    ProbeKind::Banner,
-                    ProbeKind::Tls,
-                    ProbeKind::Http,
-                    ProbeKind::Https,
-                ] {
-                    push_unique(&mut probes, probe);
+        let probes = if !config.required_services.is_empty() {
+            config
+                .required_services
+                .iter()
+                .filter_map(|s| ProbeKind::from_name(s))
+                .collect()
+        } else {
+            match config.strategy {
+                ServiceDetectionStrategy::Standard => vec![primary_probe(port)],
+                ServiceDetectionStrategy::Adaptive => {
+                    let mut probes = vec![primary_probe(port)];
+                    for probe in [
+                        ProbeKind::Banner,
+                        ProbeKind::Tls,
+                        ProbeKind::Http,
+                        ProbeKind::Https,
+                    ] {
+                        push_unique(&mut probes, probe);
+                    }
+                    probes.truncate(config.max_probes_per_endpoint);
+                    probes
                 }
-                probes.truncate(config.max_probes_per_endpoint);
-                probes
+                ServiceDetectionStrategy::Exhaustive => ProbeKind::ALL.to_vec(),
             }
-            ServiceDetectionStrategy::Exhaustive => ProbeKind::ALL.to_vec(),
         };
         attempts.extend(probes.into_iter().map(|probe| ProbeAttempt {
             ip: ip.clone(),
@@ -234,7 +256,8 @@ pub(crate) fn fallback_attempts(
     evidence: &[ProbeEvidence],
     config: &ServiceDetectionConfig,
 ) -> Vec<ProbeAttempt> {
-    if config.strategy != ServiceDetectionStrategy::Adaptive {
+    if !config.required_services.is_empty() || config.strategy != ServiceDetectionStrategy::Adaptive
+    {
         return Vec::new();
     }
 
@@ -338,7 +361,23 @@ pub(crate) fn aggregate(
                 protocol: "tcp".into(),
                 service: selected.map(|candidate| candidate.service.clone()),
                 banner,
-                source: "zgrab2".into(),
+                source: if selected_evidence
+                    .is_some_and(|item| matches!(item.module.as_str(), "dns" | "vnc"))
+                    || evidence
+                        .iter()
+                        .all(|item| matches!(item.module.as_str(), "dns" | "vnc"))
+                {
+                    "native"
+                } else if selected_evidence.is_none()
+                    && evidence
+                        .iter()
+                        .any(|item| matches!(item.module.as_str(), "dns" | "vnc"))
+                {
+                    "service_detection"
+                } else {
+                    "zgrab2"
+                }
+                .into(),
                 data: Some(data),
                 observed_at: chrono::Utc::now().timestamp_millis(),
             }
@@ -389,6 +428,8 @@ fn push_unique(probes: &mut Vec<ProbeKind>, probe: ProbeKind) {
 
 fn primary_probe(port: u16) -> ProbeKind {
     match port {
+        53 => ProbeKind::Dns,
+        5900..=5909 => ProbeKind::Vnc,
         21 => ProbeKind::Ftp,
         22 => ProbeKind::Ssh,
         23 => ProbeKind::Telnet,

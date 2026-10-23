@@ -5,6 +5,8 @@ pub(crate) const SCAN_PLAN_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ScanPlan {
+    #[serde(default)]
+    pub(crate) required_services: Vec<String>,
     pub(crate) version: u16,
     pub(crate) profile: String,
     pub(crate) stages: Vec<ScanStageSpec>,
@@ -43,6 +45,7 @@ pub(crate) struct ScanCapabilities {
     pub(crate) profiles: Vec<&'static str>,
     pub(crate) stages: Vec<&'static str>,
     pub(crate) explicit_dns_resolvers: bool,
+    pub(crate) service_protocols: Vec<&'static str>,
 }
 
 impl ScanCapabilities {
@@ -70,6 +73,11 @@ impl ScanCapabilities {
             profiles,
             stages,
             explicit_dns_resolvers: dns.enabled,
+            service_protocols: if service.enabled {
+                vec!["dns", "vnc"]
+            } else {
+                vec![]
+            },
         }
     }
 }
@@ -87,6 +95,7 @@ impl ScanPlan {
             });
         }
         Self {
+            required_services: Vec::new(),
             version: SCAN_PLAN_VERSION,
             profile: "legacy".into(),
             stages,
@@ -94,6 +103,27 @@ impl ScanPlan {
     }
 
     pub(crate) fn validate(&self) -> Result<(), ScannerError> {
+        if self
+            .required_services
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != self.required_services.len()
+            || self.required_services.len() > 2
+            || self
+                .required_services
+                .iter()
+                .any(|s| !matches!(s.as_str(), "dns" | "vnc"))
+            || (!self.required_services.is_empty()
+                && !self
+                    .stages
+                    .iter()
+                    .any(|s| s.kind == ScanStageKind::ServiceDetection))
+        {
+            return Err(ScannerError::Scan(
+                "unsupported required service protocols".into(),
+            ));
+        }
         if self.version != SCAN_PLAN_VERSION {
             return Err(ScannerError::Scan(format!(
                 "unsupported scan plan version {}; expected {}",
@@ -250,6 +280,7 @@ mod tests {
     #[test]
     fn rejects_out_of_order_or_future_plans() {
         let mut plan = ScanPlan {
+            required_services: Vec::new(),
             version: 2,
             profile: "port_only".into(),
             stages: vec![],

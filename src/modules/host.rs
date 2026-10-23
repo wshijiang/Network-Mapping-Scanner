@@ -299,7 +299,7 @@ mod tests {
             id: uuid::Uuid::nil(),
             sequence: 0,
             body: EventBody::Hello {
-                ipc_version: 1,
+                ipc_version: crate::modules::protocol::IPC_VERSION,
                 stage: ScanStageKind::PortDiscovery,
                 version: "test".into(),
             },

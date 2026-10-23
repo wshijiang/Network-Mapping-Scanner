@@ -9,6 +9,8 @@
 | 文档 | 内容 |
 | --- | --- |
 | [更新日志](CHANGELOG.md) | 自上次发布 tag 以来的扫描端变动、固定比较范围与升级兼容注意 |
+| [DNS 与 VNC 服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md) | DNS TCP/VNC 首批已接入；DoH、DoT、UDP 后续接入与恢复验收计划 |
+| [工业与物联网服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md) | 待实现：Modbus TCP、EtherNet/IP、S7、OPC UA、BACnet/IP；已有 MQTT/MQTTS 核验与补强 |
 
 ## 从这里开始
 

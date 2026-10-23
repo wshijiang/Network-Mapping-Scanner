@@ -275,7 +275,59 @@ fn save_elapsed(
     Ok(())
 }
 
+// Both engine types share the same stage deadline, block ACK and recovery boundary.
 async fn run_attempts(
+    config: &ServiceDetectionConfig,
+    attempts: &[ProbeAttempt],
+    address_family: &str,
+    cancel: &AtomicBool,
+    deadline: Instant,
+) -> Result<ProcessOutcome, ScannerError> {
+    let external: Vec<_> = attempts
+        .iter()
+        .filter(|a| !a.probe.is_native())
+        .cloned()
+        .collect();
+    let mut evidence = if external.is_empty() {
+        Vec::new()
+    } else {
+        match run_zgrab_attempts(config, &external, address_family, cancel, deadline).await? {
+            ProcessOutcome::Completed(e) => e,
+            other => return Ok(other),
+        }
+    };
+    let gap = Duration::from_secs_f64(1.0 / f64::from(config.server_rate_limit.max(1)));
+    let mut progress = tokio::time::interval(Duration::from_secs(30));
+    for attempt in attempts.iter().filter(|a| a.probe.is_native()) {
+        let wait = async {
+            sleep(gap).await;
+            super::native::probe(attempt, config, deadline).await
+        };
+        tokio::pin!(wait);
+        let result = loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(ProcessOutcome::Cancelled);
+            }
+            tokio::select! {
+                result = &mut wait => break result,
+                _ = progress.tick() => tracing::info!(event="ServiceDetectionProgress", completed_probes=evidence.len(), "native service probes progressing"),
+                _ = sleep(Duration::from_millis(20)) => {},
+                _ = tokio::time::sleep_until(deadline) => return Ok(ProcessOutcome::TimedOut(evidence, "service_detection_runtime_exceeded")),
+            }
+        };
+        evidence.push(result);
+        if evidence.len().is_multiple_of(100) {
+            tracing::info!(
+                event = "ServiceDetectionProgress",
+                native_probes = evidence.len(),
+                "native service probes progressing"
+            );
+        }
+    }
+    Ok(ProcessOutcome::Completed(evidence))
+}
+
+async fn run_zgrab_attempts(
     config: &ServiceDetectionConfig,
     attempts: &[ProbeAttempt],
     address_family: &str,
@@ -775,7 +827,7 @@ fn zgrab_config(config: &ServiceDetectionConfig) -> String {
         config.connect_timeout_seconds, config.target_timeout_seconds
     );
     let mut output = String::from("[Application Options]\n\n");
-    for probe in ProbeKind::ALL {
+    for probe in ProbeKind::ALL.into_iter().filter(|p| !p.is_native()) {
         output.push_str(&format!(
             "[{}]\nname=\"{}\"\ntrigger=\"{}\"\nport={}\n{timeout}{}\n",
             probe.section(),

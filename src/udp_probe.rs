@@ -75,13 +75,13 @@ impl ProbeResult {
     }
 }
 
-struct Request {
+pub(crate) struct Request {
     service: UdpService,
-    bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
 }
 
 impl Request {
-    fn new(service: UdpService) -> io::Result<Self> {
+    pub(crate) fn new(service: UdpService) -> io::Result<Self> {
         // All 16 bytes come from the platform RNG; protocol IDs are not UUID timestamps.
         let mut nonce = [0u8; 16];
         ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
@@ -116,7 +116,7 @@ impl Request {
         Self { service, bytes }
     }
 
-    fn identify(&self, response: &[u8]) -> Option<Value> {
+    pub(crate) fn identify(&self, response: &[u8]) -> Option<Value> {
         match self.service {
             UdpService::Dns => {
                 // Bound advertised record counts before the DNS decoder allocates.

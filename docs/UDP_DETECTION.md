@@ -34,6 +34,10 @@
 
 ## 后续批次
 
+DNS TCP/UDP、DoH、DoT 与 VNC 的专项范围和实施顺序见 [服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md)。DNS UDP 仍须完成下述端点迁移和任务协商；DoH/DoT 属于 TCP 上的加密应用识别，不能通过开启 UDP 库 API 获得。该计划的 TCP 首批已接入，但 UDP 仍待实现，不改变本页库 API 的交付范围。
+
+工业扩展见[工业与物联网服务识别计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md)：EtherNet/IP UDP/44818 和 BACnet/IP UDP/47808 计划为单播请求/响应；OPC UA UDP PubSub 与 EtherNet/IP UDP/2222 I/O 单独规划被动观察及其能力/数据契约，不向实时 I/O 端口发送探测数据。上述协议均尚未加入当前库或线上任务。
+
 第二批先修改服务端 `(scope, IP, port)` 端点身份，加入 tcp/udp，迁移投影和历史证据关联；再加入 port_sets、节点能力、任务恢复、速率和 daisyUI 入口。不能仅删除当前 TCP 过滤条件就开启 UDP。第三批加入 Elasticsearch 原生明文/TLS Transport；第四批扩展 SNMP、NBNS、RPCbind、TFTP、SQL Browser、Memcached、SIP、CoAP，再处理 QUIC/DTLS、发现和专项协议。
 
 ## 验证

@@ -34,12 +34,23 @@ pub(crate) struct ScanRuntimeConfig<'a> {
 /// Engines own process execution and output parsing. This orchestrator owns
 /// stage ordering, cancellation propagation, and stage-level failure policy.
 pub(crate) async fn run_scan(
-    mut config: ScanRuntimeConfig<'_>,
+    config: ScanRuntimeConfig<'_>,
     plan: &ScanPlan,
     target: &TargetParams,
     cancel_requested: &AtomicBool,
 ) -> Result<ScanOutcome, ScannerError> {
     plan.validate()?;
+    if plan.required_services.len() > config.service_detection.max_probes_per_endpoint {
+        return Err(ScannerError::Scan(
+            "required service probes exceed endpoint budget".into(),
+        ));
+    }
+    let mut service_detection = config.service_detection.clone();
+    service_detection.required_services = plan.required_services.clone();
+    let mut config = ScanRuntimeConfig {
+        service_detection: &service_detection,
+        ..config
+    };
     let mut ports = Vec::new();
     let mut services = Vec::new();
     let mut dns_observations = Vec::new();
@@ -799,6 +810,7 @@ done
             ..ServiceDetectionConfig::default()
         };
         let plan = ScanPlan {
+            required_services: Vec::new(),
             version: SCAN_PLAN_VERSION,
             profile: "port_only".into(),
             stages: vec![ScanStageSpec {
@@ -858,6 +870,7 @@ done
         let journal =
             crate::journal::ScanJournal::open(&store, "origin", "quality-task".into()).unwrap();
         let plan = ScanPlan {
+            required_services: Vec::new(),
             version: SCAN_PLAN_VERSION,
             profile: "dns_ports".into(),
             stages: vec![

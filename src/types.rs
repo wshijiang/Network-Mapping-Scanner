@@ -391,6 +391,8 @@ pub(crate) fn default_service_runtime() -> u64 {
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct ServiceDetectionConfig {
+    /// Task-derived native probes, serialized to the versioned worker.
+    pub(crate) required_services: Vec<String>,
     #[serde(default = "default_batch_endpoints")]
     pub(crate) batch_endpoints: usize,
     #[serde(default = "default_idle_timeout")]
@@ -432,6 +434,7 @@ impl ServiceDetectionStrategy {
 impl Default for ServiceDetectionConfig {
     fn default() -> Self {
         Self {
+            required_services: Vec::new(),
             batch_endpoints: default_batch_endpoints(),
             idle_timeout_seconds: default_idle_timeout(),
             max_runtime_seconds: default_service_runtime(),

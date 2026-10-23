@@ -50,6 +50,16 @@ max_result_bytes = 65536
 - zgrab2 使用系统 TCP 栈，`senders` 和 `server_rate_limit` 应从较低值开始压测，不能照搬
   masscan 的发包速率。
 
+### DNS TCP 与 VNC
+
+服务识别启用后，标准策略对 TCP/53 使用原生 DNS 探测，对 TCP/5900–5909 使用原生 VNC 探测。无需新增外部引擎；其他服务仍由既有 zgrab2 模块执行。DNS UDP 库不因此接入任务。
+
+IP/CIDR 任务可在 `service_inventory` 或 `vulnerability_scan` 下使用 `scan_plan.required_services` 选择 `dns`、`vnc` 或两者。选中时只对开放 TCP 端点尝试所选协议，适用于非标准端口；留空沿用默认策略。必需阶段必须完整执行，不要求目标必须返回已识别服务。节点通过 `scan_capabilities.service_protocols` 声明能力，控制端拒绝将这类任务交给旧节点。域名任务暂不支持该定向选项。
+
+DNS 使用长度分帧的随机事务根 SOA 请求（RD=0），校验完整响应、事务和问题；匹配的 REFUSED/NXDOMAIN 等仅证明 DNS 存在，不证明可递归解析。VNC 仅接受 RFB 003.003/003.007/003.008 的完整服务端问候，不发送认证数据或进入桌面。两者使用阶段总期限、目标/连接超时、取消及保守串行限速，慢目标可能使阶段达到预算并返回部分结果。
+
+观察仍为 `protocol=tcp`、`service=dns/vnc`，`source=native`，`data.schema_version=2`；DNS 摘要保存响应码与必要标志，VNC 保存 RFB 协议版本。协议版本不是产品版本。原生证据和外部引擎证据共用分块检查点；模块部署需使用 [IPC 2 Worker](MODULE_UPDATES.md)。
+
 ## 操作系统特征采集
 
 操作系统推断由服务端完成，节点继续使用已有 zgrab2 服务识别阶段，不增加扫描端口或探测
