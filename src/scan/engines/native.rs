@@ -15,17 +15,30 @@ pub(crate) async fn probe(
 ) -> ProbeEvidence {
     let deadline =
         stage_deadline.min(Instant::now() + Duration::from_secs(config.target_timeout_seconds));
-    let response = timeout_at(deadline, handshake(attempt, config, deadline)).await;
+    let response = timeout_at(deadline, async {
+        if matches!(
+            attempt.probe,
+            ProbeKind::Dot | ProbeKind::Doh | ProbeKind::Mqtts
+        ) {
+            super::encrypted_dns::probe(attempt, config)
+                .await
+                .map(|result| (None, result))
+        } else {
+            handshake(attempt, config, deadline).await
+        }
+    })
+    .await;
     let (status, banner, result) = match response {
         Ok(Ok((banner, result))) => ("success", banner, result),
         Ok(Err(error)) => (
             match error.kind() {
                 io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof => "protocol-error",
                 io::ErrorKind::TimedOut => "connection-timeout",
+                io::ErrorKind::PermissionDenied => "tls-error",
                 _ => "connection-error",
             },
             None,
-            Value::Null,
+            json!({"error_code": if error.kind()==io::ErrorKind::PermissionDenied { "tls_validation_or_handshake_failed" } else { "probe_failed" }}),
         ),
         Err(_) => ("connection-timeout", None, Value::Null),
     };
@@ -69,6 +82,13 @@ async fn handshake(
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connect timeout"))??;
     match attempt.probe {
+        ProbeKind::Modbus
+        | ProbeKind::Enip
+        | ProbeKind::S7
+        | ProbeKind::Opcua
+        | ProbeKind::Mqtt => super::industrial::handshake(&mut stream, attempt, config)
+            .await
+            .map(|r| (None, r)),
         ProbeKind::Dns => {
             let request = Request::new(UdpService::Dns)?;
             stream

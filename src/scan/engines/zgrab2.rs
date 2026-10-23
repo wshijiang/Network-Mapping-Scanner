@@ -119,6 +119,9 @@ pub(crate) async fn run_with_journal(
     cancel_requested: &AtomicBool,
     mut journal: Option<&mut crate::journal::ScanJournal<'_>>,
 ) -> Result<EngineOutcome, ScannerError> {
+    if open_ports.iter().any(|p| p.protocol == "udp") {
+        return super::udp::run(config, open_ports, cancel_requested, journal).await;
+    }
     let started = Instant::now();
     let previous_elapsed = journal.as_ref().map_or(0, |j| j.state.elapsed_ms);
     let budget_ms = config.max_runtime_seconds.saturating_mul(1000);
@@ -1185,8 +1188,7 @@ mod tests {
         assert!(config.contains("pop3s=true"));
         assert!(config.contains("[imap]\nname=\"imaps\""));
         assert!(config.contains("imaps=true"));
-        assert!(config.contains("[mqtt]\nname=\"mqtts\""));
-        assert!(config.contains("tls=true"));
+        assert!(!config.contains("[mqtt]")); // MQTT uses the bounded native CONNECT implementation.
     }
 
     #[cfg(unix)]

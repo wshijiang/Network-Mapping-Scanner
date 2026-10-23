@@ -32,7 +32,7 @@ impl Worker {
         let mut worker = Self { child, root };
         let hello = worker.read();
         assert_eq!(hello["type"], "hello");
-        assert_eq!(hello["ipc_version"], 1);
+        assert_eq!(hello["ipc_version"], 3);
         assert_eq!(hello["stage"], stage);
         worker
     }
@@ -202,7 +202,7 @@ fn package_tool_generates_private_keys_and_signs_exact_manifest() {
         0o600
     );
     fs::write(root.join("worker"), "#!/bin/sh\nexit 0\n").unwrap();
-    let manifest = json!({"schema":1,"ipc_version":1,"release_id":"test","revision":2,"target":format!("{}-unknown-linux-gnu",std::env::consts::ARCH),"files":[{"path":"worker","sha256":"","size":0,"executable":true}],"modules":{"dns_lookup":{"worker":"worker","engine":null,"templates":null}}});
+    let manifest = json!({"schema":1,"ipc_version":3,"release_id":"test","revision":2,"target":format!("{}-unknown-linux-gnu",std::env::consts::ARCH),"files":[{"path":"worker","sha256":"","size":0,"executable":true}],"modules":{"dns_lookup":{"worker":"worker","engine":null,"templates":null}}});
     fs::write(
         root.join("manifest.json"),
         serde_json::to_vec(&manifest).unwrap(),
@@ -237,4 +237,35 @@ fn package_tool_generates_private_keys_and_signs_exact_manifest() {
     .verify(&raw, &unhex(signature["signature"].as_str().unwrap()))
     .unwrap();
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_udp_worker_confirms_response_and_preserves_transport() {
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let address = socket.local_addr().unwrap();
+    let peer = std::thread::spawn(move || {
+        let mut bytes = [0; 1024];
+        let (n, from) = socket.recv_from(&mut bytes).unwrap();
+        assert_eq!(&bytes[12..n], &[0, 0, 6, 0, 1]);
+        bytes[2] = 0x80;
+        bytes[3] = 5;
+        socket.send_to(&bytes[..n], from).unwrap();
+    });
+    let mut worker = Worker::start("service_detection", "#!/bin/sh\nexit 99\n");
+    let mut request = worker.request("service_detection");
+    request["service"]["required_services"] = json!(["dns_udp"]);
+    request["service"]["enabled"] = json!(true);
+    worker.send(json!({"type":"execute","request":request}));
+    let id = "019c0000-0000-7000-8000-000000000001";
+    worker.send(json!({"type":"input","id":id,"observation":{"kind":"port","ip":"127.0.0.1","port":address.port(),"protocol":"udp","state":"unknown","source":"udp_target","observed_at":0}}));
+    worker.send(json!({"type":"input_end","id":id}));
+    let events = worker.finish();
+    let observation = events.iter().find(|e| e["type"] == "observation").unwrap();
+    assert_eq!(observation["observation"]["protocol"], "udp");
+    assert_eq!(observation["observation"]["service"], "dns");
+    assert_eq!(events.last().unwrap()["outcome"], "completed");
+    peer.join().unwrap();
 }

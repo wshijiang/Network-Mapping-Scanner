@@ -30,12 +30,24 @@ pub(crate) enum ProbeKind {
     Banner,
     Dns,
     Vnc,
+    Dot,
+    Doh,
+    Modbus,
+    Enip,
+    S7,
+    Opcua,
 }
 
 impl ProbeKind {
-    pub(crate) const ALL: [Self; 25] = [
+    pub(crate) const ALL: [Self; 31] = [
+        Self::Modbus,
+        Self::Enip,
+        Self::S7,
+        Self::Opcua,
         Self::Dns,
         Self::Vnc,
+        Self::Dot,
+        Self::Doh,
         Self::Banner,
         Self::Tls,
         Self::Http,
@@ -80,12 +92,14 @@ impl ProbeKind {
         Self::Imap,
     ];
 
-    const ADAPTIVE_TLS_FALLBACK: [Self; 5] = [
+    const ADAPTIVE_TLS_FALLBACK: [Self; 7] = [
         Self::Mqtts,
         Self::Smtps,
         Self::Imaps,
         Self::Pop3s,
         Self::Ftps,
+        Self::Dot,
+        Self::Doh,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -113,7 +127,13 @@ impl ProbeKind {
             Self::Memcached => "memcached",
             Self::Mongodb => "mongodb",
             Self::Banner => "banner",
+            Self::Modbus => "modbus",
+            Self::Enip => "enip",
+            Self::S7 => "s7",
+            Self::Opcua => "opcua",
             Self::Dns => "dns",
+            Self::Dot => "dot",
+            Self::Doh => "doh",
             Self::Vnc => "vnc",
         }
     }
@@ -132,7 +152,13 @@ impl ProbeKind {
 
     pub(crate) fn default_port(self) -> u16 {
         match self {
+            Self::Modbus => 502,
+            Self::Enip => 44818,
+            Self::S7 => 102,
+            Self::Opcua => 4840,
             Self::Dns => 53,
+            Self::Dot => 853,
+            Self::Doh => 443,
             Self::Vnc => 5900,
             Self::Ftp => 21,
             Self::Ftps => 990,
@@ -172,7 +198,23 @@ impl ProbeKind {
     }
 
     pub(crate) fn is_native(self) -> bool {
-        matches!(self, Self::Dns | Self::Vnc)
+        matches!(
+            self,
+            Self::Dns
+                | Self::Vnc
+                | Self::Dot
+                | Self::Doh
+                | Self::Modbus
+                | Self::Enip
+                | Self::S7
+                | Self::Opcua
+                | Self::Mqtt
+                | Self::Mqtts
+        )
+    }
+
+    pub(crate) fn is_industrial(self) -> bool {
+        matches!(self, Self::Modbus | Self::Enip | Self::S7 | Self::Opcua)
     }
 
     fn from_name(name: &str) -> Option<Self> {
@@ -238,7 +280,10 @@ pub(crate) fn initial_attempts(
                     probes.truncate(config.max_probes_per_endpoint);
                     probes
                 }
-                ServiceDetectionStrategy::Exhaustive => ProbeKind::ALL.to_vec(),
+                ServiceDetectionStrategy::Exhaustive => ProbeKind::ALL
+                    .into_iter()
+                    .filter(|p| !p.is_industrial())
+                    .collect(),
             }
         };
         attempts.extend(probes.into_iter().map(|probe| ProbeAttempt {
@@ -340,6 +385,9 @@ pub(crate) fn aggregate(
             let mut retained_evidence = selected_evidence
                 .map(|item| vec![retained_handshake(item)])
                 .unwrap_or_default();
+            if selected_evidence.is_none() && let Some(item)=evidence.iter().find(|e| matches!(e.module.as_str(),"dot"|"doh") && e.status=="tls-error") {
+                retained_evidence.push(json!({"role":"probe_diagnostic","module":"diagnostic","result":{"probe":item.module,"status":item.status,"error_code":"tls_validation_or_handshake_failed"},"truncated":false}));
+            }
             if selected_evidence.is_some_and(|item| item.module == ProbeKind::Https.name())
                 && let Some(tls) = evidence
                     .iter()
@@ -362,16 +410,16 @@ pub(crate) fn aggregate(
                 service: selected.map(|candidate| candidate.service.clone()),
                 banner,
                 source: if selected_evidence
-                    .is_some_and(|item| matches!(item.module.as_str(), "dns" | "vnc"))
+                    .is_some_and(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
                     || evidence
                         .iter()
-                        .all(|item| matches!(item.module.as_str(), "dns" | "vnc"))
+                        .all(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
                 {
                     "native"
                 } else if selected_evidence.is_none()
                     && evidence
                         .iter()
-                        .any(|item| matches!(item.module.as_str(), "dns" | "vnc"))
+                        .any(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
                 {
                     "service_detection"
                 } else {
@@ -440,7 +488,8 @@ fn primary_probe(port: u16) -> ProbeKind {
         443 | 4443 | 8443 | 9443 => ProbeKind::Https,
         445 => ProbeKind::Smb,
         465 => ProbeKind::Smtps,
-        636 | 853 | 989 => ProbeKind::Tls,
+        853 => ProbeKind::Dot,
+        636 | 989 => ProbeKind::Tls,
         990 => ProbeKind::Ftps,
         993 => ProbeKind::Imaps,
         995 => ProbeKind::Pop3s,
@@ -522,6 +571,13 @@ fn candidates_for(
                 reason: "banner_signature",
             });
         }
+    }
+    // A confirmed application outranks its own HTTP/TLS wrapper, not unrelated apps.
+    if candidates.iter().any(|c| c.service == "doh") {
+        candidates.retain(|c| !matches!(c.service.as_str(), "https" | "http" | "tls"));
+    }
+    if candidates.iter().any(|c| c.service == "dot") {
+        candidates.retain(|c| c.service != "tls");
     }
     candidates.sort_by(|left, right| {
         right
@@ -856,14 +912,16 @@ mod tests {
             ..ServiceDetectionConfig::default()
         };
         let attempts = initial_attempts(&[port(9000), port(9000)], &config);
-        assert_eq!(attempts.len(), ProbeKind::ALL.len());
+        let expected = ProbeKind::ALL.iter().filter(|p| !p.is_industrial()).count();
+        assert!(attempts.iter().all(|a| !a.probe.is_industrial()));
+        assert_eq!(attempts.len(), expected);
         assert_eq!(
             attempts
                 .iter()
                 .map(|attempt| attempt.probe)
                 .collect::<HashSet<_>>()
                 .len(),
-            ProbeKind::ALL.len()
+            expected
         );
     }
 }

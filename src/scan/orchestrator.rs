@@ -47,11 +47,16 @@ pub(crate) async fn run_scan(
     }
     let mut service_detection = config.service_detection.clone();
     service_detection.required_services = plan.required_services.clone();
+    service_detection.probe_options = plan.service_probe_options.clone();
     let mut config = ScanRuntimeConfig {
         service_detection: &service_detection,
         ..config
     };
-    let mut ports = Vec::new();
+    let mut ports = if matches!(plan.profile.as_str(), "udp_inventory" | "udp_passive") {
+        super::engines::udp::targets(target)?
+    } else {
+        Vec::new()
+    };
     let mut services = Vec::new();
     let mut dns_observations = Vec::new();
     let mut vulnerabilities = Vec::new();
@@ -234,7 +239,12 @@ pub(crate) async fn run_scan(
     if plan.profile != "dns_ports" {
         observations.extend(dns_observations.iter().cloned().map(ScanObservation::Dns));
     }
-    observations.extend(ports.into_iter().map(ScanObservation::Port));
+    observations.extend(
+        ports
+            .into_iter()
+            .filter(|p| p.source != "udp_target")
+            .map(ScanObservation::Port),
+    );
     observations.extend(services.into_iter().map(ScanObservation::Service));
     observations.extend(
         vulnerabilities
@@ -810,6 +820,7 @@ done
             ..ServiceDetectionConfig::default()
         };
         let plan = ScanPlan {
+            service_probe_options: Default::default(),
             required_services: Vec::new(),
             version: SCAN_PLAN_VERSION,
             profile: "port_only".into(),
@@ -870,6 +881,7 @@ done
         let journal =
             crate::journal::ScanJournal::open(&store, "origin", "quality-task".into()).unwrap();
         let plan = ScanPlan {
+            service_probe_options: Default::default(),
             required_services: Vec::new(),
             version: SCAN_PLAN_VERSION,
             profile: "dns_ports".into(),

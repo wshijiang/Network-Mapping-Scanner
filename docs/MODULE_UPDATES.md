@@ -10,11 +10,11 @@
 
 保持单活动任务、plan v1、现有四类 observation、结果上传协议 3 及 500 条/8 MiB 的批次限制。模块状态位于独立 schema 1 数据库，当前主状态库为 schema 4（含注册凭据摘要）；Worker 升级不迁移主状态库。
 
-## IPC 2 兼容边界
+## IPC 3 兼容边界
 
-DNS TCP/VNC 定向服务探测将任务派生参数传递给 Worker，本版本使用 IPC 2，旧 IPC 1 Worker 与 manifest 会被拒绝，避免报告成功却未执行所选协议。plan 仍为 v1，结果上传仍为协议 3，SQLite schema 不变。
+DNS、加密 DNS、工业主动/UDP 被动服务识别将任务参数传递给 Worker，本版本使用 IPC 3，旧 IPC 1/2 Worker 与 manifest 会被拒绝，避免报告成功却未执行所选协议。TCP plan 保持 v1，显式 UDP profile 使用 v2，结果上传仍为协议 3，SQLite schema 不变。
 
-已启用模块的部署应暂停新任务分配、排空旧 generation 的活动任务/检查点，再升级 Agent、Worker 和完整 IPC 2 模块包，确认活动环境预检成功后恢复。不要混用 IPC 1/2 或删除旧 pin、状态库、待上传数据来完成升级；需要回退时也应先排空并恢复完整配套版本。仅上传已归档结果不需要重跑 Worker。
+已启用模块的部署应暂停新任务分配、排空旧 generation 的活动任务/检查点，再升级 Agent、Worker 和完整 IPC 3 模块包，确认活动环境预检成功后恢复。不要混用 IPC 1/2/3 或删除旧 pin、状态库、待上传数据来完成升级；需要回退时也应先排空并恢复完整配套版本。仅上传已归档结果不需要重跑 Worker。
 
 ## 构建与启用
 
@@ -69,7 +69,7 @@ service-release/
 ```json
 {
   "schema": 1,
-  "ipc_version": 2,
+  "ipc_version": 3,
   "release_id": "service-2026-10-13-01",
   "revision": 2,
   "target": "x86_64-unknown-linux-gnu",

@@ -1,7 +1,7 @@
-//! Bounded UDP protocol probes for the next task-protocol revision.
+//! Bounded standalone UDP protocol probes.
 //!
-//! This library API is deliberately not wired into task execution or capabilities:
-//! the server must first distinguish TCP and UDP endpoint identities. Callers must
+//! This public API stays independent; task execution reuses DNS validation through
+//! the version 2 native UDP engine. NTP/STUN remain library-only. Callers must
 //! authorize targets and enforce aggregate/per-IP rate and concurrency limits.
 use hickory_resolver::proto::{
     op::{Message, MessageType, OpCode},

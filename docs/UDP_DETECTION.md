@@ -1,10 +1,10 @@
-# UDP 探测内核与后续接入
+# UDP 服务识别与独立探测内核
 
 [文档中心](README.md) · [服务探测分批计划](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_DETECTION_ROADMAP.md)
 
-## 当前交付：库内核
+## 当前任务与库 API
 
-第一批新增公开 `scanner_rs::udp_probe` 库 API，包含 DNS、NTP、STUN 定向单播探测。它没有接入普通扫描循环、任务下发、心跳能力、配置或 CLI；部署本批扫描器不会自动执行 UDP 探测。只有后续完成协议端口任务、UDP 能力协商及服务端端点迁移后才开放线上使用。
+第一批新增公开 `scanner_rs::udp_probe` 库 API，包含 DNS、NTP、STUN 定向单播探测。该库保持独立；当前另有原生引擎通过 plan v2 将 DNS、EtherNet/IP、BACnet 单播及受限实时流量被动接收接入任务。须配套更新服务端并完成端点投影迁移，详见[服务协议识别与部署](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。NTP/STUN 尚未接入任务，不能据此声明可下发扫描。
 
 ## 协议范围
 

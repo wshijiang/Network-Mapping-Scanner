@@ -50,15 +50,17 @@ max_result_bytes = 65536
 - zgrab2 使用系统 TCP 栈，`senders` 和 `server_rate_limit` 应从较低值开始压测，不能照搬
   masscan 的发包速率。
 
-### DNS TCP 与 VNC
+### DNS、加密 DNS、VNC 与工业协议
 
-服务识别启用后，标准策略对 TCP/53 使用原生 DNS 探测，对 TCP/5900–5909 使用原生 VNC 探测。无需新增外部引擎；其他服务仍由既有 zgrab2 模块执行。DNS UDP 库不因此接入任务。
+原生 TCP 识别支持 `dns`、`vnc`、`dot`、`doh`、`modbus`、`enip`、`s7`、`opcua`、`mqtt`、`mqtts`。标准策略在 TCP/53、853、5900–5909 使用 DNS、DoT、VNC；工业协议须显式选择。MQTT/MQTTS 使用原生有界 CONNECT/CONNACK，支持 3.1.1/5.0 及合法认证拒绝。
 
-IP/CIDR 任务可在 `service_inventory` 或 `vulnerability_scan` 下使用 `scan_plan.required_services` 选择 `dns`、`vnc` 或两者。选中时只对开放 TCP 端点尝试所选协议，适用于非标准端口；留空沿用默认策略。必需阶段必须完整执行，不要求目标必须返回已识别服务。节点通过 `scan_capabilities.service_protocols` 声明能力，控制端拒绝将这类任务交给旧节点。域名任务暂不支持该定向选项。
+TCP 的 `scan_plan.required_services` 只尝试所选协议，`service_probe_options` 提供 TLS 服务名、DoH 单一路径、额外公开 CA、Modbus Unit ID、S7 TSAP 和 MQTT 版本。TLS 默认验证证书并固定连接目标 IP，不重定向或绕过验证。
 
-DNS 使用长度分帧的随机事务根 SOA 请求（RD=0），校验完整响应、事务和问题；匹配的 REFUSED/NXDOMAIN 等仅证明 DNS 存在，不证明可递归解析。VNC 仅接受 RFB 003.003/003.007/003.008 的完整服务端问候，不发送认证数据或进入桌面。两者使用阶段总期限、目标/连接超时、取消及保守串行限速，慢目标可能使阶段达到预算并返回部分结果。
+UDP 使用 plan v2 的 `udp_inventory`（DNS、EtherNet/IP UDP/44818、经典 BACnet/IP 单播）与 `udp_passive`（EtherNet/IP I/O、UADP 有限标量 keyframe 被动接收），无需 masscan 命中。无有效响应/报文不判定开放或关闭。当前每任务仅一种传输，不支持 UDP 域名后续任务。
 
-观察仍为 `protocol=tcp`、`service=dns/vnc`，`source=native`，`data.schema_version=2`；DNS 摘要保存响应码与必要标志，VNC 保存 RFB 协议版本。协议版本不是产品版本。原生证据和外部引擎证据共用分块检查点；模块部署需使用 [IPC 2 Worker](MODULE_UPDATES.md)。
+节点声明协议能力及 `max_service_probes`；所选协议数不得超过节点预算。原生引擎共用累计期限、取消、限速及 ACK 检查点；UDP 限制最多 256 个地址、主动最多 32 个端口，被动单一接收端口/明确本机 IPv4 接口/1–60 秒窗口。被动结果归属实际发送源，不能证明端口可达，不保留过程数据。
+
+完整支持矩阵、任务示例、参数边界和配套服务端投影迁移见[服务协议识别与部署](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。Worker 必须配套 [IPC 3 模块包](MODULE_UPDATES.md)。
 
 ## 操作系统特征采集
 

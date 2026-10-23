@@ -2,13 +2,21 @@
 
 [文档中心](README.md) · [部署与升级](DEPLOYMENT.md) · [服务端更新日志](https://github.com/wshijiang/network-mapping/blob/main/docs/CHANGELOG.md)
 
+## 未发布：加密 DNS、工业与 UDP 服务识别（2026-10-23）
+
+- 增加默认验证证书的 DoT/DoH 原生识别，固定目标 IP、合法 SNI/路径、公开 CA；普通 HTTPS/HTML、重定向和不匹配 DNS 不确认 DoH。
+- 增加显式 Modbus TCP、EtherNet/IP、经典 S7comm、OPC UA 最小握手；MQTT/MQTTS 改为原生 3.1.1/5.0 CONNECT/CONNACK，确认合法认证拒绝。
+- plan v2 独立 UDP 任务接入 DNS、EtherNet/IP ListIdentity、BACnet/IP 单播，以及有界 IPv4 实时流量被动接收；不发送 I/O 控制数据，不把沉默标为开放/关闭。
+- 新增 `max_service_probes` 能力和 IPC 3 参数契约，复用期限、限速、取消、ACK 与检查点。新增直接依赖 tokio-rustls/rustls-native-certs/ipnet，复用锁定传递版本；未进行无关升级。
+- 详见[使用说明](USAGE.md)、[模块更新](MODULE_UPDATES.md)和[完整支持矩阵](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。被动协议仅支持文档列出的保守子集，真实设备验收仍需进行。
+
 ## 未发布：DNS TCP / VNC 服务探测（2026-10-23）
 
 - 服务识别阶段新增原生 DNS TCP 与 VNC 探测：默认映射 53、5900–5909，支持显式选择协议探测非标准端口；不向 zgrab2 注册未支持的模块。默认服务策略继续识别其他已有协议。
 - DNS 校验 TCP 分帧、随机事务 ID 和根 SOA 问题，合法拒绝响应只证明协议存在；VNC 只接收完整受支持的 RFB 问候，不尝试认证。结果记录 `source=native` 和有界 schema 2 证据。
 - 节点上报 `scan_capabilities.service_protocols`，任务通过 `scan_plan.required_services` 显式选择 DNS/VNC，复用阶段期限、取消、限速、分块 ACK 与检查点。
 - Worker IPC 升为 2，拒绝旧 Worker 静默忽略定向探测参数。启用模块的部署须排空旧 generation 任务，配套升级 Agent、Worker 和完整 IPC 2 模块包；结果上传仍为协议 3。详见[模块更新](MODULE_UPDATES.md)。
-- 已完成合成协议、回环、真实 Worker 及本地回归；未进行线上节点/真实 DNS、VNC 产品验收。DoH、DoT、UDP 和工业协议仍按规划后续实施。
+- 已完成合成协议、回环、真实 Worker 及本地回归；未进行线上节点/真实 DNS、VNC 产品验收。本条记录 A 阶段；其后实现见上方扩展条目。
 
 ## 未发布：服务识别扩展规划（2026-10-23）
 
