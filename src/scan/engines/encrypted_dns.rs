@@ -63,7 +63,7 @@ fn tls_config(config: &ServiceDetectionConfig) -> io::Result<rustls::ClientConfi
     .with_no_client_auth())
 }
 fn tls_evidence(cert: Option<&[u8]>) -> Value {
-    let fingerprint = cert.map(|der| format!("{:x}", Sha256::digest(der)));
+    let fingerprint = cert.map(|der| crate::modules::package::hex(&Sha256::digest(der)));
     json!({"implicit_tls":true,"certificate_verified":true,"handshake_log":{"server_certificates":{"certificate":{"parsed":{"fingerprint_sha256":fingerprint}}}}})
 }
 pub(super) async fn dns_frame<S: AsyncRead + AsyncWrite + Unpin>(

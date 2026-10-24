@@ -13,7 +13,7 @@ pub(crate) fn fingerprint(id: &str, token: &str) -> String {
     hash.update(id.as_bytes());
     hash.update([0]);
     hash.update(token.as_bytes());
-    format!("{:x}", hash.finalize())
+    crate::modules::package::hex(&hash.finalize())
 }
 
 pub(crate) fn load() -> Result<Registration, ScannerError> {

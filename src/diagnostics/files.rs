@@ -8,7 +8,7 @@ use std::{
 };
 
 pub fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::modules::package::hex(&Sha256::digest(bytes))
 }
 
 pub struct LogDirectory {
@@ -153,7 +153,7 @@ impl LogDirectory {
             captured_at,
             size_bytes: size,
             excluded_tail_bytes: current.size_bytes - size,
-            sha256: format!("{:x}", hasher.finalize()),
+            sha256: crate::modules::package::hex(&hasher.finalize()),
         })
     }
 }
@@ -178,6 +178,17 @@ fn complete_prefix(file: &mut File, length: u64) -> io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn digest_preserves_standard_sha256_vectors() {
+        assert_eq!(
+            digest(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            digest(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
     #[test]
     fn snapshot_excludes_half_line_and_preserves_original_after_append() {
         let root =
