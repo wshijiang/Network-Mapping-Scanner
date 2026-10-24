@@ -2,6 +2,11 @@
 
 [文档中心](README.md) · [部署与升级](DEPLOYMENT.md) · [服务端更新日志](https://github.com/wshijiang/network-mapping/blob/main/docs/CHANGELOG.md)
 
+## 未发布：Hickory 0.26 升级适配（2026-10-24）
+
+- 适配 Hickory 0.26 的解析器构造错误、连接配置、Lookup answer API、MX/SRV 字段与 DNS 消息元数据，修复依赖升级的编译失败。
+- 指定 UDP/TCP 解析器继续固定用户提供的 IP/端口及传输；DNS 响应继续校验事务、问题、类型、长度和记录数上限。新增回环 UDP/TCP 自定义端口、来源元数据与 TTL 回归。
+
 ## 未发布：全部服务自动识别（2026-10-23）
 
 - 默认识别策略为 adaptive，所有已实现 TCP 协议进入自动候选；补齐工业端口映射和工业回退/full exhaustive，HTTPS 自动细分 DoH，完整 RFB Banner 可确认非标准端口 VNC。

@@ -12,6 +12,10 @@
 
 可选模块化热更新的具体接口和操作见 [MODULE_UPDATES.md](MODULE_UPDATES.md)。
 
+## Hickory 0.26 升级
+
+指定解析器使用独立 `ConnectionConfig` 保存 UDP/TCP 传输和自定义端口，通过 `ResolverConfig::from_name_servers` 构造。`ResolverBuilder::build` 失败必须上报，不回退到其他解析器；成功答案仍保留记录 TTL 与 MX/SRV 结构字段。原生 DNS/TCP、DoT、DoH 和 UDP 库共用消息校验，读取 0.26 元数据字段时不能省略事务 ID、响应类型、原问题及报文边界校验。
+
 ## 模块架构
 
 ```

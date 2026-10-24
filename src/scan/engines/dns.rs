@@ -1,17 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use std::{
-    collections::BTreeSet,
-    net::{IpAddr, SocketAddr},
-};
+use std::{collections::BTreeSet, net::IpAddr};
 
-use hickory_resolver::proto::{
-    rr::{RData, RecordType},
-    xfer::Protocol,
-};
+use hickory_resolver::proto::rr::{RData, RecordType};
 use hickory_resolver::{
     TokioResolver,
-    config::{NameServerConfig, ResolverConfig},
+    config::{ConnectionConfig, NameServerConfig, ResolverConfig},
 };
 
 use crate::error::ScannerError;
@@ -121,10 +115,10 @@ struct ConfiguredResolver {
 fn resolver_configs(resolvers: &[DnsResolver]) -> Result<Vec<ConfiguredResolver>, ScannerError> {
     if resolvers.is_empty() {
         let resolver = TokioResolver::builder_tokio()
+            .and_then(|builder| builder.build())
             .map_err(|error| {
                 ScannerError::Scan(format!("failed to create DNS system resolver: {error}"))
-            })?
-            .build();
+            })?;
         return Ok(vec![ConfiguredResolver {
             resolver,
             metadata: None,
@@ -137,22 +131,27 @@ fn resolver_configs(resolvers: &[DnsResolver]) -> Result<Vec<ConfiguredResolver>
             let ip = metadata.ip.parse::<IpAddr>().map_err(|error| {
                 ScannerError::Scan(format!("invalid DNS resolver {}: {error}", metadata.ip))
             })?;
-            let protocol = match metadata.transport.as_str() {
-                "udp" => Protocol::Udp,
-                "tcp" => Protocol::Tcp,
+            let mut connection = match metadata.transport.as_str() {
+                "udp" => ConnectionConfig::udp(),
+                "tcp" => ConnectionConfig::tcp(),
                 other => {
                     return Err(ScannerError::Scan(format!(
                         "unsupported DNS resolver transport '{other}'"
                     )));
                 }
             };
-            let mut config = ResolverConfig::new();
-            config.add_name_server(NameServerConfig::new(
-                SocketAddr::new(ip, metadata.port),
-                protocol,
-            ));
+            connection.port = metadata.port;
+            let config = ResolverConfig::from_name_servers(vec![NameServerConfig::new(
+                ip,
+                true,
+                vec![connection],
+            )]);
             Ok(ConfiguredResolver {
-                resolver: TokioResolver::builder_with_config(config, Default::default()).build(),
+                resolver: TokioResolver::builder_with_config(config, Default::default())
+                    .build()
+                    .map_err(|error| {
+                        ScannerError::Scan(format!("failed to create DNS resolver: {error}"))
+                    })?,
                 metadata: Some(metadata),
             })
         })
@@ -192,8 +191,9 @@ async fn query(
         Ok(Ok(lookup)) => (
             "NOERROR".into(),
             lookup
-                .record_iter()
-                .map(|record| answer_from_rdata(record.record_type(), record.data(), record.ttl()))
+                .answers()
+                .iter()
+                .map(|record| answer_from_rdata(record.record_type(), &record.data, record.ttl))
                 .collect(),
         ),
         Ok(Err(error)) => (response_code(&error.to_string()), Vec::new()),
@@ -244,14 +244,14 @@ fn answer_from_rdata(record_type: RecordType, data: &RData, ttl: u32) -> DnsAnsw
         RData::NS(value) => answer.value = value.0.to_string(),
         RData::PTR(value) => answer.value = value.0.to_string(),
         RData::MX(value) => {
-            answer.value = value.exchange().to_string();
-            answer.priority = Some(value.preference());
+            answer.value = value.exchange.to_string();
+            answer.priority = Some(value.preference);
         }
         RData::SRV(value) => {
-            answer.value = value.target().to_string();
-            answer.priority = Some(value.priority());
-            answer.weight = Some(value.weight());
-            answer.port = Some(value.port());
+            answer.value = value.target.to_string();
+            answer.priority = Some(value.priority);
+            answer.weight = Some(value.weight);
+            answer.port = Some(value.port);
         }
         _ => {}
     }
@@ -315,5 +315,78 @@ mod tests {
         assert_eq!(srv.priority, Some(20));
         assert_eq!(srv.weight, Some(5));
         assert_eq!(srv.port, Some(443));
+    }
+
+    #[tokio::test]
+    async fn custom_udp_and_tcp_resolvers_preserve_transport_port_metadata_and_ttl() {
+        use hickory_resolver::proto::{
+            op::{Message, MessageType, OpCode},
+            rr::{Record, rdata::A},
+        };
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::{TcpListener, UdpSocket},
+        };
+        fn response(bytes: &[u8]) -> Vec<u8> {
+            let request = Message::from_vec(bytes).unwrap();
+            let mut response = Message::new(request.id, MessageType::Response, OpCode::Query);
+            response.metadata.recursion_available = true;
+            response.queries = request.queries;
+            response.add_answer(Record::from_rdata(
+                Name::from_ascii("probe.test.").unwrap(),
+                321,
+                RData::A(A("192.0.2.20".parse().unwrap())),
+            ));
+            response.to_vec().unwrap()
+        }
+        for transport in ["udp", "tcp"] {
+            let (port, server) = if transport == "udp" {
+                let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+                let port = socket.local_addr().unwrap().port();
+                let server = tokio::spawn(async move {
+                    let mut bytes = [0; 8192];
+                    let (n, peer) = socket.recv_from(&mut bytes).await.unwrap();
+                    socket.send_to(&response(&bytes[..n]), peer).await.unwrap();
+                });
+                (port, server)
+            } else {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let server = tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let n = stream.read_u16().await.unwrap();
+                    let mut bytes = vec![0; n as usize];
+                    stream.read_exact(&mut bytes).await.unwrap();
+                    let reply = response(&bytes);
+                    stream.write_u16(reply.len() as u16).await.unwrap();
+                    stream.write_all(&reply).await.unwrap();
+                });
+                (port, server)
+            };
+            let metadata = DnsResolver {
+                id: "local".into(),
+                label: "Local fixture".into(),
+                ip: "127.0.0.1".into(),
+                port,
+                transport: transport.into(),
+            };
+            let resolvers = resolver_configs(std::slice::from_ref(&metadata)).unwrap();
+            let result = query(
+                &resolvers[0].resolver,
+                "probe.test.",
+                RecordType::A,
+                2,
+                Some(&metadata),
+            )
+            .await;
+            assert_eq!(result.response_code, "NOERROR");
+            assert_eq!(result.answers.len(), 1);
+            assert_eq!(result.answers[0].value, "192.0.2.20");
+            assert_eq!(result.answers[0].ttl, 321);
+            assert_eq!(result.resolver_port, Some(port));
+            assert_eq!(result.resolver_transport.as_deref(), Some(transport));
+            assert_eq!(result.resolver_id.as_deref(), Some("local"));
+            server.await.unwrap();
+        }
     }
 }
