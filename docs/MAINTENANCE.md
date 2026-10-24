@@ -15,6 +15,9 @@
 ## 摘要格式兼容
 
 sha2 0.11 的摘要数组通过逐字节小写十六进制编码输出，统一使用 `modules::package::hex`。诊断快照、一次性注册输入指纹及 TLS 证书指纹仍是 64 位 SHA-256 字符串；注册身份保留 `scanner_id + NUL + token` 的输入边界，升级无需清除注册状态或重新生成已有文件摘要。
+## Hickory 0.26 升级
+
+指定解析器使用独立 `ConnectionConfig` 保存 UDP/TCP 传输和自定义端口，通过 `ResolverConfig::from_name_servers` 构造。`ResolverBuilder::build` 失败必须上报，不回退到其他解析器；成功答案仍保留记录 TTL 与 MX/SRV 结构字段。原生 DNS/TCP、DoT、DoH 和 UDP 库共用消息校验，读取 0.26 元数据字段时不能省略事务 ID、响应类型、原问题及报文边界校验。
 
 ## 模块架构
 

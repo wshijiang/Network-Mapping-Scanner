@@ -134,22 +134,22 @@ impl Request {
                 let mut decoder = BinDecoder::new(response);
                 let message = Message::read(&mut decoder).ok()?;
                 if !decoder.is_empty()
-                    || message.id() != u16::from_be_bytes([self.bytes[0], self.bytes[1]])
-                    || message.message_type() != MessageType::Response
-                    || message.op_code() != OpCode::Query
-                    || message.queries().len() != 1
+                    || message.id != u16::from_be_bytes([self.bytes[0], self.bytes[1]])
+                    || message.message_type != MessageType::Response
+                    || message.op_code != OpCode::Query
+                    || message.queries.len() != 1
                 {
                     return None;
                 }
-                let query = &message.queries()[0];
+                let query = &message.queries[0];
                 if !query.name().is_root()
                     || query.query_type() != RecordType::SOA
                     || query.query_class() != DNSClass::IN
                 {
                     return None;
                 }
-                Some(json!({"response_code":u16::from(message.response_code()),
-                    "truncated":message.truncated(),"authoritative":message.authoritative()}))
+                Some(json!({"response_code":u16::from(message.response_code),
+                    "truncated":message.truncation,"authoritative":message.authoritative}))
             }
             UdpService::Ntp => {
                 if response.len() != 48

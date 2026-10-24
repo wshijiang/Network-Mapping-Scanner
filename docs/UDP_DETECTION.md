@@ -16,7 +16,7 @@ UDP 主动任务自动尝试 DNS、EtherNet/IP ListIdentity 和 BACnet/IP（仅 
 | NTP | 48 字节 v4 mode 3 客户端请求 | 来源端点、mode 4、版本、stratum、originate 时间戳匹配；记录协议版本和 KoD，不推断软件版本 |
 | STUN | 20 字节 Binding 请求 | 来源端点、magic cookie、96 位事务 ID、长度和 TLV 边界；成功要求合法 mapped-address，错误要求合法 error-code；不保存地址、软件名或错误原因 |
 
-使用现有 Tokio 1、Hickory 0.25 和 ring，无新增依赖或锁文件变更。请求 ID 使用平台安全随机源；每次重试更换。NTP 当前只接受基本 48 字节响应，带认证/扩展的其他长度保守保持未确认。STUN 不执行 TURN Allocate，也不据此证明提供 TURN 中继。
+使用现有 Tokio 1、Hickory 0.26 和 ring，无新增依赖或锁文件变更。请求 ID 使用平台安全随机源；每次重试更换。NTP 当前只接受基本 48 字节响应，带认证/扩展的其他长度保守保持未确认。STUN 不执行 TURN Allocate，也不据此证明提供 TURN 中继。
 
 ## API 与边界
 
