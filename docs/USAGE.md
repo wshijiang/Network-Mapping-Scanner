@@ -10,6 +10,10 @@
 
 标准 masscan 的输出模式、参数与切换步骤见[masscan 标准输出适配与迁移](MASSCAN.md)。旧配置默认使用兼容模式，迁移时显式设置 `scanner.masscan_output_mode = "standard_list"`。
 
+## UDP 扩展状态
+
+本批新增 DNS/NTP/STUN 库内核，但尚未开放 UDP 任务或 CLI 配置，现有服务任务仍只识别 TCP。服务端端点身份与能力协商完成后再接入，详见 [UDP 探测](UDP_DETECTION.md)。不要使用 U: 前缀绕过当前任务端口校验。
+
 ## 服务识别
 
 普通扫描需要安装 `masscan`；服务识别还需要 `zgrab2`。masscan 只负责发现开放端口，zgrab2
@@ -32,7 +36,7 @@ max_result_bytes = 65536
 ```
 
 - `required = false` 时，zgrab2 整体失败仍会上报 masscan 已发现的开放端口。
-- `strategy = "standard"` 保持按端口选择单个协议的旧行为；`adaptive` 先执行
+- `strategy = "standard"` 按端口选择应用握手，HTTPS 端口同时尝试 DoH；默认 `adaptive` 结合端口线索、
   Banner、TLS 和 HTTP(S) 探测，再为未识别端点执行预算内的协议回退；`exhaustive`
   会对每个 TCP 端点执行全部受支持模块。
 - 465、990、993、995 和 8883 分别使用 SMTPS、FTPS、IMAPS、POP3S 和 MQTTS
@@ -45,6 +49,18 @@ max_result_bytes = 65536
 - 未配置 `[service_detection]` 的旧配置默认关闭该功能。
 - zgrab2 使用系统 TCP 栈，`senders` 和 `server_rate_limit` 应从较低值开始压测，不能照搬
   masscan 的发包速率。
+
+### DNS、加密 DNS、VNC 与工业协议
+
+原生 TCP 识别支持 `dns`、`vnc`、`dot`、`doh`、`modbus`、`enip`、`s7`、`opcua`、`mqtt`、`mqtts`。所有已实现 TCP 协议均属于自动识别候选，无需在创建页选择。端口映射覆盖 TCP/53、853、5900–5909、502、44818、102、4840、1883、8883 等；HTTPS 端口追加 DoH 确认。工业协议参与标准端口、adaptive 回退及 exhaustive 探测。MQTT/MQTTS 使用原生有界 CONNECT/CONNACK，支持 3.1.1/5.0 及合法认证拒绝。
+
+TCP 默认省略或留空 `scan_plan.required_services`，使用完整自动识别策略；旧 API 的非空列表仍可限制探测范围。`service_probe_options` 无需选择协议即可提供 TLS 服务名、DoH 单一路径、额外公开 CA、Modbus Unit ID、S7 TSAP 和 MQTT 版本。TLS 默认验证证书并固定连接目标 IP，不重定向或绕过验证。非标准端口可能受节点探测预算和超时限制，自动识别不保证每次执行都尝试所有协议；HTTPS 成功后会在剩余预算内细分 DoH，合法 RFB 问候也可直接确认非标准端口的 VNC。
+
+UDP 使用 plan v2 的 `udp_inventory`（DNS、EtherNet/IP UDP/44818、经典 BACnet/IP 单播）与 `udp_passive`（EtherNet/IP I/O、UADP 有限标量 keyframe 被动接收），无需 masscan 命中。无有效响应/报文不判定开放或关闭。当前每任务仅一种传输，不支持 UDP 域名后续任务。
+
+节点声明协议能力及 `max_service_probes`；所选协议数不得超过节点预算。原生引擎共用累计期限、取消、限速及 ACK 检查点；UDP 限制最多 256 个地址、主动最多 32 个端口，被动单一接收端口/明确本机 IPv4 接口/1–60 秒窗口。被动结果归属实际发送源，不能证明端口可达，不保留过程数据。
+
+完整支持矩阵、任务示例、参数边界和配套服务端投影迁移见[服务协议识别与部署](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。Worker 必须配套 [IPC 3 模块包](MODULE_UPDATES.md)。
 
 ## 操作系统特征采集
 

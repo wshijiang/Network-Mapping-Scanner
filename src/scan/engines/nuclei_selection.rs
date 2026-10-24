@@ -22,8 +22,8 @@ impl Selection {
 fn service_selection(service: &str) -> Option<(Selection, Option<&'static str>)> {
     Some(match service {
         "http" | "http-alt" => (Selection::Web, Some("http")),
-        "https" | "https-alt" => (Selection::Web, Some("https")),
-        "tls" | "ssl" => (Selection::Tls, None),
+        "https" | "https-alt" | "doh" => (Selection::Web, Some("https")),
+        "tls" | "ssl" | "dot" => (Selection::Tls, None),
         "ssh" => (Selection::Service("ssh"), None),
         "ftp" => (Selection::Service("ftp"), None),
         "smtp" => (Selection::Service("smtp"), None),

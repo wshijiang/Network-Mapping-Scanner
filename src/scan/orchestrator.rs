@@ -34,13 +34,29 @@ pub(crate) struct ScanRuntimeConfig<'a> {
 /// Engines own process execution and output parsing. This orchestrator owns
 /// stage ordering, cancellation propagation, and stage-level failure policy.
 pub(crate) async fn run_scan(
-    mut config: ScanRuntimeConfig<'_>,
+    config: ScanRuntimeConfig<'_>,
     plan: &ScanPlan,
     target: &TargetParams,
     cancel_requested: &AtomicBool,
 ) -> Result<ScanOutcome, ScannerError> {
     plan.validate()?;
-    let mut ports = Vec::new();
+    if plan.required_services.len() > config.service_detection.max_probes_per_endpoint {
+        return Err(ScannerError::Scan(
+            "required service probes exceed endpoint budget".into(),
+        ));
+    }
+    let mut service_detection = config.service_detection.clone();
+    service_detection.required_services = plan.required_services.clone();
+    service_detection.probe_options = plan.service_probe_options.clone();
+    let mut config = ScanRuntimeConfig {
+        service_detection: &service_detection,
+        ..config
+    };
+    let mut ports = if matches!(plan.profile.as_str(), "udp_inventory" | "udp_passive") {
+        super::engines::udp::targets(target)?
+    } else {
+        Vec::new()
+    };
     let mut services = Vec::new();
     let mut dns_observations = Vec::new();
     let mut vulnerabilities = Vec::new();
@@ -223,7 +239,12 @@ pub(crate) async fn run_scan(
     if plan.profile != "dns_ports" {
         observations.extend(dns_observations.iter().cloned().map(ScanObservation::Dns));
     }
-    observations.extend(ports.into_iter().map(ScanObservation::Port));
+    observations.extend(
+        ports
+            .into_iter()
+            .filter(|p| p.source != "udp_target")
+            .map(ScanObservation::Port),
+    );
     observations.extend(services.into_iter().map(ScanObservation::Service));
     observations.extend(
         vulnerabilities
@@ -697,6 +718,7 @@ done
             required: true,
             batch_endpoints: 1,
             zgrab_path: zgrab.to_string_lossy().into_owned(),
+            strategy: crate::types::ServiceDetectionStrategy::Standard,
             ..Default::default()
         };
         let plan = super::ScanPlan::legacy(&service);
@@ -799,6 +821,8 @@ done
             ..ServiceDetectionConfig::default()
         };
         let plan = ScanPlan {
+            service_probe_options: Default::default(),
+            required_services: Vec::new(),
             version: SCAN_PLAN_VERSION,
             profile: "port_only".into(),
             stages: vec![ScanStageSpec {
@@ -858,6 +882,8 @@ done
         let journal =
             crate::journal::ScanJournal::open(&store, "origin", "quality-task".into()).unwrap();
         let plan = ScanPlan {
+            service_probe_options: Default::default(),
+            required_services: Vec::new(),
             version: SCAN_PLAN_VERSION,
             profile: "dns_ports".into(),
             stages: vec![

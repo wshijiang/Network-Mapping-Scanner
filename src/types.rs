@@ -388,9 +388,66 @@ pub(crate) fn default_service_runtime() -> u64 {
     1800
 }
 
+#[derive(Debug, PartialEq, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ServiceProbeOptions {
+    pub(crate) modbus_unit_id: Option<u8>,
+    pub(crate) s7_tsap: Option<u16>,
+    pub(crate) mqtt_version: Option<u8>,
+    pub(crate) server_name: Option<String>,
+    pub(crate) doh_path: Option<String>,
+    pub(crate) tls_ca_pem: Option<String>,
+    pub(crate) passive_bind: Option<String>,
+    pub(crate) passive_group: Option<String>,
+    pub(crate) passive_interface: Option<String>,
+    pub(crate) passive_window_seconds: Option<u16>,
+}
+impl ServiceProbeOptions {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.mqtt_version.is_some_and(|v| !matches!(v, 4 | 5)) {
+            return Err("MQTT protocol version must be 4 (3.1.1) or 5".into());
+        }
+
+        if self.server_name.as_ref().is_some_and(|s| {
+            s.is_empty()
+                || s.len() > 253
+                || !s.split('.').all(|l| {
+                    !l.is_empty()
+                        && l.len() <= 63
+                        && !l.starts_with('-')
+                        && !l.ends_with('-')
+                        && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+        }) {
+            return Err("invalid probe server name".into());
+        }
+        if self.doh_path.as_ref().is_some_and(|s| {
+            s.len() > 256
+                || !s.starts_with('/')
+                || s.starts_with("//")
+                || s.bytes()
+                    .any(|b| b.is_ascii_control() || matches!(b, b'?' | b'#' | b' '))
+        }) {
+            return Err("invalid DNS-over-HTTPS path".into());
+        }
+        if self.tls_ca_pem.as_ref().is_some_and(|s| {
+            s.is_empty()
+                || s.len() > 65536
+                || !s.contains("-----BEGIN CERTIFICATE-----")
+                || s.contains("PRIVATE KEY")
+        }) {
+            return Err("invalid probe CA certificate".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct ServiceDetectionConfig {
+    pub(crate) probe_options: ServiceProbeOptions,
+    /// Task-derived native probes, serialized to the versioned worker.
+    pub(crate) required_services: Vec<String>,
     #[serde(default = "default_batch_endpoints")]
     pub(crate) batch_endpoints: usize,
     #[serde(default = "default_idle_timeout")]
@@ -413,8 +470,8 @@ pub(crate) struct ServiceDetectionConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ServiceDetectionStrategy {
-    #[default]
     Standard,
+    #[default]
     Adaptive,
     Exhaustive,
 }
@@ -432,12 +489,14 @@ impl ServiceDetectionStrategy {
 impl Default for ServiceDetectionConfig {
     fn default() -> Self {
         Self {
+            probe_options: Default::default(),
+            required_services: Vec::new(),
             batch_endpoints: default_batch_endpoints(),
             idle_timeout_seconds: default_idle_timeout(),
             max_runtime_seconds: default_service_runtime(),
             enabled: false,
             required: false,
-            strategy: ServiceDetectionStrategy::Standard,
+            strategy: ServiceDetectionStrategy::Adaptive,
             max_probes_per_endpoint: 8,
             confidence_threshold: 80,
             zgrab_path: "zgrab2".into(),

@@ -28,10 +28,26 @@ pub(crate) enum ProbeKind {
     Memcached,
     Mongodb,
     Banner,
+    Dns,
+    Vnc,
+    Dot,
+    Doh,
+    Modbus,
+    Enip,
+    S7,
+    Opcua,
 }
 
 impl ProbeKind {
-    pub(crate) const ALL: [Self; 23] = [
+    pub(crate) const ALL: [Self; 31] = [
+        Self::Modbus,
+        Self::Enip,
+        Self::S7,
+        Self::Opcua,
+        Self::Dns,
+        Self::Vnc,
+        Self::Dot,
+        Self::Doh,
         Self::Banner,
         Self::Tls,
         Self::Http,
@@ -57,7 +73,7 @@ impl ProbeKind {
         Self::Imaps,
     ];
 
-    const ADAPTIVE_FALLBACK: [Self; 14] = [
+    const ADAPTIVE_FALLBACK: [Self; 20] = [
         Self::Redis,
         Self::Mysql,
         Self::Postgres,
@@ -66,6 +82,12 @@ impl ProbeKind {
         Self::Smb,
         Self::Rdp,
         Self::Memcached,
+        Self::Dns,
+        Self::Vnc,
+        Self::Modbus,
+        Self::Enip,
+        Self::S7,
+        Self::Opcua,
         Self::Ssh,
         Self::Ftp,
         Self::Telnet,
@@ -74,12 +96,14 @@ impl ProbeKind {
         Self::Imap,
     ];
 
-    const ADAPTIVE_TLS_FALLBACK: [Self; 5] = [
+    const ADAPTIVE_TLS_FALLBACK: [Self; 7] = [
         Self::Mqtts,
         Self::Smtps,
         Self::Imaps,
         Self::Pop3s,
         Self::Ftps,
+        Self::Dot,
+        Self::Doh,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -107,6 +131,14 @@ impl ProbeKind {
             Self::Memcached => "memcached",
             Self::Mongodb => "mongodb",
             Self::Banner => "banner",
+            Self::Modbus => "modbus",
+            Self::Enip => "enip",
+            Self::S7 => "s7",
+            Self::Opcua => "opcua",
+            Self::Dns => "dns",
+            Self::Dot => "dot",
+            Self::Doh => "doh",
+            Self::Vnc => "vnc",
         }
     }
 
@@ -124,6 +156,14 @@ impl ProbeKind {
 
     pub(crate) fn default_port(self) -> u16 {
         match self {
+            Self::Modbus => 502,
+            Self::Enip => 44818,
+            Self::S7 => 102,
+            Self::Opcua => 4840,
+            Self::Dns => 53,
+            Self::Dot => 853,
+            Self::Doh => 443,
+            Self::Vnc => 5900,
             Self::Ftp => 21,
             Self::Ftps => 990,
             Self::Ssh => 22,
@@ -159,6 +199,22 @@ impl ProbeKind {
             Self::Mqtts => "tls=true\n",
             _ => "",
         }
+    }
+
+    pub(crate) fn is_native(self) -> bool {
+        matches!(
+            self,
+            Self::Dns
+                | Self::Vnc
+                | Self::Dot
+                | Self::Doh
+                | Self::Modbus
+                | Self::Enip
+                | Self::S7
+                | Self::Opcua
+                | Self::Mqtt
+                | Self::Mqtts
+        )
     }
 
     fn from_name(name: &str) -> Option<Self> {
@@ -202,22 +258,32 @@ pub(crate) fn initial_attempts(
     let endpoints = unique_tcp_endpoints(open_ports);
     let mut attempts = Vec::new();
     for (ip, port) in endpoints {
-        let probes = match config.strategy {
-            ServiceDetectionStrategy::Standard => vec![primary_probe(port)],
-            ServiceDetectionStrategy::Adaptive => {
-                let mut probes = vec![primary_probe(port)];
-                for probe in [
-                    ProbeKind::Banner,
-                    ProbeKind::Tls,
-                    ProbeKind::Http,
-                    ProbeKind::Https,
-                ] {
-                    push_unique(&mut probes, probe);
+        let probes = if !config.required_services.is_empty() {
+            config
+                .required_services
+                .iter()
+                .filter_map(|s| ProbeKind::from_name(s))
+                .collect()
+        } else {
+            match config.strategy {
+                ServiceDetectionStrategy::Standard => {
+                    port_probes(port, config.max_probes_per_endpoint)
                 }
-                probes.truncate(config.max_probes_per_endpoint);
-                probes
+                ServiceDetectionStrategy::Adaptive => {
+                    let mut probes = port_probes(port, config.max_probes_per_endpoint);
+                    for probe in [
+                        ProbeKind::Banner,
+                        ProbeKind::Tls,
+                        ProbeKind::Http,
+                        ProbeKind::Https,
+                    ] {
+                        push_unique(&mut probes, probe);
+                    }
+                    probes.truncate(config.max_probes_per_endpoint);
+                    probes
+                }
+                ServiceDetectionStrategy::Exhaustive => ProbeKind::ALL.to_vec(),
             }
-            ServiceDetectionStrategy::Exhaustive => ProbeKind::ALL.to_vec(),
         };
         attempts.extend(probes.into_iter().map(|probe| ProbeAttempt {
             ip: ip.clone(),
@@ -234,7 +300,8 @@ pub(crate) fn fallback_attempts(
     evidence: &[ProbeEvidence],
     config: &ServiceDetectionConfig,
 ) -> Vec<ProbeAttempt> {
-    if config.strategy != ServiceDetectionStrategy::Adaptive {
+    if !config.required_services.is_empty() || config.strategy != ServiceDetectionStrategy::Adaptive
+    {
         return Vec::new();
     }
 
@@ -250,7 +317,16 @@ pub(crate) fn fallback_attempts(
         });
     let mut attempts = Vec::new();
     for (ip, port) in unique_tcp_endpoints(open_ports) {
-        if confident.contains(&(ip.clone(), port)) {
+        // HTTPS is also DoH's transport. Refine it before treating the endpoint
+        // as terminal, including HTTPS discovered on a nonstandard port.
+        let refine_https = evidence.iter().any(|item| {
+            item.ip == ip && item.port == port && item.module == "https" && item.status == "success"
+        }) && !completed.contains(&ProbeAttempt {
+            ip: ip.clone(),
+            port,
+            probe: ProbeKind::Doh,
+        });
+        if confident.contains(&(ip.clone(), port)) && !refine_https {
             continue;
         }
         let mut remaining = config
@@ -264,7 +340,9 @@ pub(crate) fn fallback_attempts(
                 && item.module == ProbeKind::Tls.name()
                 && item.status == "success"
         });
-        let fallback_probes: &[ProbeKind] = if tls_succeeded {
+        let fallback_probes: &[ProbeKind] = if refine_https {
+            &[ProbeKind::Doh]
+        } else if tls_succeeded {
             &ProbeKind::ADAPTIVE_TLS_FALLBACK
         } else {
             &ProbeKind::ADAPTIVE_FALLBACK
@@ -317,6 +395,9 @@ pub(crate) fn aggregate(
             let mut retained_evidence = selected_evidence
                 .map(|item| vec![retained_handshake(item)])
                 .unwrap_or_default();
+            if selected_evidence.is_none() && let Some(item)=evidence.iter().find(|e| matches!(e.module.as_str(),"dot"|"doh") && e.status=="tls-error") {
+                retained_evidence.push(json!({"role":"probe_diagnostic","module":"diagnostic","result":{"probe":item.module,"status":item.status,"error_code":"tls_validation_or_handshake_failed"},"truncated":false}));
+            }
             if selected_evidence.is_some_and(|item| item.module == ProbeKind::Https.name())
                 && let Some(tls) = evidence
                     .iter()
@@ -338,7 +419,23 @@ pub(crate) fn aggregate(
                 protocol: "tcp".into(),
                 service: selected.map(|candidate| candidate.service.clone()),
                 banner,
-                source: "zgrab2".into(),
+                source: if selected_evidence
+                    .is_some_and(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
+                    || evidence
+                        .iter()
+                        .all(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
+                {
+                    "native"
+                } else if selected_evidence.is_none()
+                    && evidence
+                        .iter()
+                        .any(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
+                {
+                    "service_detection"
+                } else {
+                    "zgrab2"
+                }
+                .into(),
                 data: Some(data),
                 observed_at: chrono::Utc::now().timestamp_millis(),
             }
@@ -389,6 +486,12 @@ fn push_unique(probes: &mut Vec<ProbeKind>, probe: ProbeKind) {
 
 fn primary_probe(port: u16) -> ProbeKind {
     match port {
+        502 => ProbeKind::Modbus,
+        44818 => ProbeKind::Enip,
+        102 => ProbeKind::S7,
+        4840 => ProbeKind::Opcua,
+        53 => ProbeKind::Dns,
+        5900..=5909 => ProbeKind::Vnc,
         21 => ProbeKind::Ftp,
         22 => ProbeKind::Ssh,
         23 => ProbeKind::Telnet,
@@ -399,7 +502,8 @@ fn primary_probe(port: u16) -> ProbeKind {
         443 | 4443 | 8443 | 9443 => ProbeKind::Https,
         445 => ProbeKind::Smb,
         465 => ProbeKind::Smtps,
-        636 | 853 | 989 => ProbeKind::Tls,
+        853 => ProbeKind::Dot,
+        636 | 989 => ProbeKind::Tls,
         990 => ProbeKind::Ftps,
         993 => ProbeKind::Imaps,
         995 => ProbeKind::Pop3s,
@@ -413,6 +517,16 @@ fn primary_probe(port: u16) -> ProbeKind {
         27017 => ProbeKind::Mongodb,
         _ => ProbeKind::Banner,
     }
+}
+
+fn port_probes(port: u16, budget: usize) -> Vec<ProbeKind> {
+    let primary = primary_probe(port);
+    let mut probes = vec![primary];
+    if primary == ProbeKind::Https {
+        probes.push(ProbeKind::Doh);
+    }
+    probes.truncate(budget);
+    probes
 }
 
 fn confident_endpoints(
@@ -482,6 +596,13 @@ fn candidates_for(
             });
         }
     }
+    // A confirmed application outranks its own HTTP/TLS wrapper, not unrelated apps.
+    if candidates.iter().any(|c| c.service == "doh") {
+        candidates.retain(|c| !matches!(c.service.as_str(), "https" | "http" | "tls"));
+    }
+    if candidates.iter().any(|c| c.service == "dot") {
+        candidates.retain(|c| c.service != "tls");
+    }
     candidates.sort_by(|left, right| {
         right
             .score
@@ -508,7 +629,12 @@ fn select_candidate(candidates: &[Candidate], threshold: u8) -> Option<&Candidat
 fn classify_banner(banner: &str) -> Option<(&'static str, u8)> {
     let trimmed = banner.trim();
     let lower = trimmed.to_ascii_lowercase();
-    if trimmed.starts_with("SSH-") {
+    if ["RFB 003.003\n", "RFB 003.007\n", "RFB 003.008\n"]
+        .iter()
+        .any(|greeting| banner.starts_with(greeting))
+    {
+        Some(("vnc", 99))
+    } else if trimmed.starts_with("SSH-") {
         Some(("ssh", 99))
     } else if trimmed.starts_with("HTTP/") {
         Some(("http", 98))
@@ -556,8 +682,11 @@ mod tests {
 
     #[test]
     fn standard_strategy_keeps_single_port_mapped_probe() {
-        let attempts =
-            initial_attempts(&[port(22), port(9000)], &ServiceDetectionConfig::default());
+        let config = ServiceDetectionConfig {
+            strategy: ServiceDetectionStrategy::Standard,
+            ..Default::default()
+        };
+        let attempts = initial_attempts(&[port(22), port(9000)], &config);
         assert_eq!(attempts.len(), 2);
         assert_eq!(attempts[0].probe, ProbeKind::Ssh);
         assert_eq!(attempts[1].probe, ProbeKind::Banner);
@@ -567,7 +696,10 @@ mod tests {
     fn standard_strategy_uses_application_probes_for_implicit_tls_ports() {
         let attempts = initial_attempts(
             &[port(465), port(990), port(993), port(995), port(8883)],
-            &ServiceDetectionConfig::default(),
+            &ServiceDetectionConfig {
+                strategy: ServiceDetectionStrategy::Standard,
+                ..Default::default()
+            },
         );
         assert_eq!(
             attempts
@@ -601,6 +733,65 @@ mod tests {
     }
 
     #[test]
+    fn automatic_detection_covers_every_module_on_its_standard_port_without_selection() {
+        let config = ServiceDetectionConfig::default();
+        assert!(config.required_services.is_empty());
+        for probe in ProbeKind::ALL {
+            let attempts = initial_attempts(&[port(probe.default_port())], &config);
+            assert!(
+                attempts.iter().any(|a| a.probe == probe),
+                "missing {}",
+                probe.name()
+            );
+            assert!(attempts.len() <= config.max_probes_per_endpoint);
+        }
+    }
+
+    #[test]
+    fn automatic_fallback_includes_industrial_protocols_without_selection() {
+        let config = ServiceDetectionConfig {
+            max_probes_per_endpoint: 32,
+            ..Default::default()
+        };
+        let ports = [port(19000)];
+        let initial = initial_attempts(&ports, &config);
+        let fallback = fallback_attempts(&ports, &initial, &[], &config);
+        for probe in [
+            ProbeKind::Modbus,
+            ProbeKind::Enip,
+            ProbeKind::S7,
+            ProbeKind::Opcua,
+        ] {
+            assert!(fallback.iter().any(|a| a.probe == probe));
+        }
+        assert!(initial.len() + fallback.len() <= config.max_probes_per_endpoint);
+    }
+
+    #[test]
+    fn automatic_https_on_nonstandard_port_is_refined_to_doh_within_budget() {
+        let ports = [port(10443)];
+        let config = ServiceDetectionConfig::default();
+        let initial = initial_attempts(&ports, &config);
+        let mut evidence = vec![evidence("https", 10443, "success", None)];
+        let fallback = fallback_attempts(&ports, &initial, &evidence, &config);
+        assert_eq!(fallback.len(), 1);
+        assert_eq!(fallback[0].probe, ProbeKind::Doh);
+        evidence.push(super::tests::evidence("doh", 10443, "success", None));
+        assert_eq!(
+            aggregate(&evidence, &config)[0].service.as_deref(),
+            Some("doh")
+        );
+        let mut completed = initial;
+        completed.extend(fallback);
+        assert!(fallback_attempts(&ports, &completed, &evidence, &config).is_empty());
+        let exhausted = ServiceDetectionConfig {
+            max_probes_per_endpoint: 4,
+            ..config
+        };
+        assert!(fallback_attempts(&ports, &completed[..4], &evidence[..1], &exhausted).is_empty());
+    }
+
+    #[test]
     fn banner_signature_identifies_ssh_on_nonstandard_port() {
         let config = ServiceDetectionConfig {
             strategy: ServiceDetectionStrategy::Adaptive,
@@ -617,6 +808,22 @@ mod tests {
         );
         assert_eq!(results[0].service.as_deref(), Some("ssh"));
         assert_eq!(results[0].data.as_ref().unwrap()["confidence"], 99);
+    }
+
+    #[test]
+    fn automatic_banner_identifies_vnc_without_accepting_partial_or_unknown_greetings() {
+        let config = ServiceDetectionConfig::default();
+        for (banner, expected) in [
+            ("RFB 003.008\n", Some("vnc")),
+            ("RFB 003.008", None),
+            ("RFB 999.999\n", None),
+        ] {
+            let result = aggregate(
+                &[evidence("banner", 15900, "success", Some(banner))],
+                &config,
+            );
+            assert_eq!(result[0].service.as_deref(), expected);
+        }
     }
 
     #[test]
@@ -815,14 +1022,15 @@ mod tests {
             ..ServiceDetectionConfig::default()
         };
         let attempts = initial_attempts(&[port(9000), port(9000)], &config);
-        assert_eq!(attempts.len(), ProbeKind::ALL.len());
+        let expected = ProbeKind::ALL.len();
+        assert_eq!(attempts.len(), expected);
         assert_eq!(
             attempts
                 .iter()
                 .map(|attempt| attempt.probe)
                 .collect::<HashSet<_>>()
                 .len(),
-            ProbeKind::ALL.len()
+            expected
         );
     }
 }

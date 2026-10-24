@@ -390,7 +390,7 @@ impl Registry {
         }
         let manifest = Manifest {
             schema: 1,
-            ipc_version: 1,
+            ipc_version: crate::modules::protocol::IPC_VERSION,
             release_id: format!("rollback-to-{generation}"),
             revision: current.revision + 1,
             target: format!("{}-unknown-linux-gnu", std::env::consts::ARCH),
@@ -593,9 +593,11 @@ impl Registry {
     pub(crate) fn report(&self) -> serde_json::Value {
         match self.active() {
             Ok(Some(e)) => {
-                serde_json::json!({"protocol_versions":[1],"active_generation":e.generation,"release_id":e.release_id,"revision":e.revision,"modules":e.modules})
+                serde_json::json!({"protocol_versions":[crate::modules::protocol::IPC_VERSION],"active_generation":e.generation,"release_id":e.release_id,"revision":e.revision,"modules":e.modules})
             }
-            Ok(None) => serde_json::json!({"protocol_versions":[1],"status":"uninitialized"}),
+            Ok(None) => {
+                serde_json::json!({"protocol_versions":[crate::modules::protocol::IPC_VERSION],"status":"uninitialized"})
+            }
             Err(e) => serde_json::json!({"status":"error","error":e.to_string()}),
         }
     }
@@ -731,7 +733,7 @@ fn bootstrap_manifest(local: &AppConfig, config: &ModulesConfig) -> Result<Manif
     }
     Ok(Manifest {
         schema: 1,
-        ipc_version: 1,
+        ipc_version: crate::modules::protocol::IPC_VERSION,
         release_id: "local-bootstrap".into(),
         revision: 1,
         target: format!("{}-unknown-linux-gnu", std::env::consts::ARCH),
@@ -780,7 +782,7 @@ mod tests {
                     id: Uuid::nil(),
                     sequence: 0,
                     body: super::super::protocol::EventBody::Hello {
-                        ipc_version: 1,
+                        ipc_version: crate::modules::protocol::IPC_VERSION,
                         stage,
                         version: "test".into(),
                     },

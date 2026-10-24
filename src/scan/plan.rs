@@ -5,6 +5,10 @@ pub(crate) const SCAN_PLAN_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ScanPlan {
+    #[serde(default)]
+    pub(crate) service_probe_options: crate::types::ServiceProbeOptions,
+    #[serde(default)]
+    pub(crate) required_services: Vec<String>,
     pub(crate) version: u16,
     pub(crate) profile: String,
     pub(crate) stages: Vec<ScanStageSpec>,
@@ -43,6 +47,8 @@ pub(crate) struct ScanCapabilities {
     pub(crate) profiles: Vec<&'static str>,
     pub(crate) stages: Vec<&'static str>,
     pub(crate) explicit_dns_resolvers: bool,
+    pub(crate) max_service_probes: usize,
+    pub(crate) service_protocols: Vec<&'static str>,
 }
 
 impl ScanCapabilities {
@@ -54,7 +60,7 @@ impl ScanCapabilities {
         let mut profiles = vec!["legacy", "port_only"];
         let mut stages = vec!["port_discovery"];
         if service.enabled {
-            profiles.push("service_inventory");
+            profiles.extend(["service_inventory", "udp_inventory", "udp_passive"]);
             stages.push("service_detection");
         }
         if dns.enabled {
@@ -66,10 +72,36 @@ impl ScanCapabilities {
             stages.push("vulnerability_detection");
         }
         Self {
-            plan_versions: vec![SCAN_PLAN_VERSION],
+            plan_versions: vec![SCAN_PLAN_VERSION, 2],
             profiles,
             stages,
             explicit_dns_resolvers: dns.enabled,
+            max_service_probes: if service.enabled {
+                service.max_probes_per_endpoint
+            } else {
+                0
+            },
+            service_protocols: if service.enabled {
+                vec![
+                    "dns",
+                    "vnc",
+                    "dot",
+                    "doh",
+                    "modbus",
+                    "enip",
+                    "s7",
+                    "opcua",
+                    "mqtt",
+                    "mqtts",
+                    "dns_udp",
+                    "enip_udp",
+                    "bacnet",
+                    "opcua_pubsub",
+                    "enip_io",
+                ]
+            } else {
+                vec![]
+            },
         }
     }
 }
@@ -87,6 +119,8 @@ impl ScanPlan {
             });
         }
         Self {
+            service_probe_options: Default::default(),
+            required_services: Vec::new(),
             version: SCAN_PLAN_VERSION,
             profile: "legacy".into(),
             stages,
@@ -94,6 +128,98 @@ impl ScanPlan {
     }
 
     pub(crate) fn validate(&self) -> Result<(), ScannerError> {
+        self.service_probe_options
+            .validate()
+            .map_err(ScannerError::Scan)?;
+        if self.profile == "udp_passive" {
+            super::engines::passive::validate_options(&self.service_probe_options)?;
+            if self.version != 2
+                || self.stages.len() != 1
+                || self.stages[0].kind != ScanStageKind::ServiceDetection
+                || !self.stages[0].required
+                || self.required_services.is_empty()
+                || self.required_services.len() > 2
+                || self
+                    .required_services
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    != self.required_services.len()
+                || self
+                    .required_services
+                    .iter()
+                    .any(|s| !matches!(s.as_str(), "opcua_pubsub" | "enip_io"))
+            {
+                return Err(ScannerError::Scan("invalid UDP passive plan".into()));
+            }
+            return Ok(());
+        }
+        if self.service_probe_options.passive_bind.is_some()
+            || self.service_probe_options.passive_group.is_some()
+            || self.service_probe_options.passive_interface.is_some()
+            || self.service_probe_options.passive_window_seconds.is_some()
+        {
+            return Err(ScannerError::Scan(
+                "passive options require udp_passive profile".into(),
+            ));
+        }
+        if self.profile == "udp_inventory" {
+            if self.version != 2
+                || self.stages.len() != 1
+                || self.stages[0].kind != ScanStageKind::ServiceDetection
+                || !self.stages[0].required
+                || self.required_services.is_empty()
+                || self.required_services.len() > 3
+                || self
+                    .required_services
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    != self.required_services.len()
+                || self
+                    .required_services
+                    .iter()
+                    .any(|s| !matches!(s.as_str(), "dns_udp" | "enip_udp" | "bacnet"))
+                || self.service_probe_options != crate::types::ServiceProbeOptions::default()
+            {
+                return Err(ScannerError::Scan(
+                    "invalid version 2 UDP inventory plan".into(),
+                ));
+            }
+            return Ok(());
+        }
+        if self
+            .required_services
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != self.required_services.len()
+            || self.required_services.len() > 10
+            || self.required_services.iter().any(|s| {
+                !matches!(
+                    s.as_str(),
+                    "dns"
+                        | "vnc"
+                        | "dot"
+                        | "doh"
+                        | "modbus"
+                        | "enip"
+                        | "s7"
+                        | "opcua"
+                        | "mqtt"
+                        | "mqtts"
+                )
+            })
+            || (!self.required_services.is_empty()
+                && !self
+                    .stages
+                    .iter()
+                    .any(|s| s.kind == ScanStageKind::ServiceDetection))
+        {
+            return Err(ScannerError::Scan(
+                "unsupported required service protocols".into(),
+            ));
+        }
         if self.version != SCAN_PLAN_VERSION {
             return Err(ScannerError::Scan(format!(
                 "unsupported scan plan version {}; expected {}",
@@ -250,6 +376,8 @@ mod tests {
     #[test]
     fn rejects_out_of_order_or_future_plans() {
         let mut plan = ScanPlan {
+            service_probe_options: Default::default(),
+            required_services: Vec::new(),
             version: 2,
             profile: "port_only".into(),
             stages: vec![],

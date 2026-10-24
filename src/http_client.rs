@@ -8,7 +8,7 @@ use std::time::Duration;
 const USER_AGENT: &str = "Scanner/1.0";
 
 pub(crate) enum FetchTaskOutcome {
-    Task(AssignedTask),
+    Task(Box<AssignedTask>),
     NoTask,
     RecoveryRequired,
 }
@@ -181,7 +181,7 @@ async fn fetch_task_from_endpoint(
                 ports = %task.task_port,
                 "task response decoded"
             );
-            Ok(FetchTaskOutcome::Task(task))
+            Ok(FetchTaskOutcome::Task(Box::new(task)))
         }
         _ => Err(response_error(response, operation).await),
     }

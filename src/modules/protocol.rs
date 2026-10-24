@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use uuid::Uuid;
 
-pub(crate) const IPC_VERSION: u16 = 1;
+pub(crate) const IPC_VERSION: u16 = 3;
 pub(crate) const MAX_FRAME: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_RESULTS: usize = 64 * 1024 * 1024;
 

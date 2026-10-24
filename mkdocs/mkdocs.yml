@@ -36,12 +36,14 @@ plugins:
 
 nav:
   - 文档首页: README.md
+  - 更新日志: CHANGELOG.md
   - 入门部署:
       - 部署选型与原生安装: DEPLOYMENT.md
       - Docker 部署: DOCKER.md
       - 启动配置检查: CONFIG_CHECK.md
   - 配置与引擎:
       - 配置与使用: USAGE.md
+      - UDP 探测内核与后续接入: UDP_DETECTION.md
       - masscan 适配与迁移: MASSCAN.md
       - Nuclei 部署与运维: NUCLEI.md
       - 目标执行反馈: PERFORMANCE.md

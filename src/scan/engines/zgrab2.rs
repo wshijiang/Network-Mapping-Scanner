@@ -119,6 +119,9 @@ pub(crate) async fn run_with_journal(
     cancel_requested: &AtomicBool,
     mut journal: Option<&mut crate::journal::ScanJournal<'_>>,
 ) -> Result<EngineOutcome, ScannerError> {
+    if open_ports.iter().any(|p| p.protocol == "udp") {
+        return super::udp::run(config, open_ports, cancel_requested, journal).await;
+    }
     let started = Instant::now();
     let previous_elapsed = journal.as_ref().map_or(0, |j| j.state.elapsed_ms);
     let budget_ms = config.max_runtime_seconds.saturating_mul(1000);
@@ -275,7 +278,70 @@ fn save_elapsed(
     Ok(())
 }
 
+// Both engine types share the same stage deadline, block ACK and recovery boundary.
 async fn run_attempts(
+    config: &ServiceDetectionConfig,
+    attempts: &[ProbeAttempt],
+    address_family: &str,
+    cancel: &AtomicBool,
+    deadline: Instant,
+) -> Result<ProcessOutcome, ScannerError> {
+    let external: Vec<_> = attempts
+        .iter()
+        .filter(|a| !a.probe.is_native())
+        .cloned()
+        .collect();
+    let mut evidence = if external.is_empty() {
+        Vec::new()
+    } else {
+        match run_zgrab_attempts(config, &external, address_family, cancel, deadline).await? {
+            ProcessOutcome::Completed(e) => e,
+            other => return Ok(other),
+        }
+    };
+    let gap = Duration::from_secs_f64(1.0 / f64::from(config.server_rate_limit.max(1)));
+    let mut progress = tokio::time::interval(Duration::from_secs(30));
+    for attempt in attempts.iter().filter(|a| a.probe.is_native()) {
+        let wait = async {
+            sleep(gap).await;
+            super::native::probe(attempt, config, deadline).await
+        };
+        tokio::pin!(wait);
+        let result = loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(ProcessOutcome::Cancelled);
+            }
+            tokio::select! {
+                result = &mut wait => break result,
+                _ = progress.tick() => tracing::info!(event="ServiceDetectionProgress", completed_probes=evidence.len(), "native service probes progressing"),
+                _ = sleep(Duration::from_millis(20)) => {},
+                _ = tokio::time::sleep_until(deadline) => return Ok(ProcessOutcome::TimedOut(evidence, "service_detection_runtime_exceeded")),
+            }
+        };
+        evidence.push(result);
+        // The probe and scheduler timers may both become ready at the stage
+        // deadline. Completion cannot turn stage expiry into a target timeout.
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(ProcessOutcome::Cancelled);
+        }
+        if Instant::now() >= deadline {
+            return Ok(ProcessOutcome::TimedOut(
+                evidence,
+                "service_detection_runtime_exceeded",
+            ));
+        }
+        if evidence.len().is_multiple_of(100) {
+            tracing::info!(
+                event = "ServiceDetectionProgress",
+                native_probes = evidence.len(),
+                "native service probes progressing"
+            );
+        }
+    }
+    Ok(ProcessOutcome::Completed(evidence))
+}
+
+async fn run_zgrab_attempts(
     config: &ServiceDetectionConfig,
     attempts: &[ProbeAttempt],
     address_family: &str,
@@ -775,7 +841,7 @@ fn zgrab_config(config: &ServiceDetectionConfig) -> String {
         config.connect_timeout_seconds, config.target_timeout_seconds
     );
     let mut output = String::from("[Application Options]\n\n");
-    for probe in ProbeKind::ALL {
+    for probe in ProbeKind::ALL.into_iter().filter(|p| !p.is_native()) {
         output.push_str(&format!(
             "[{}]\nname=\"{}\"\ntrigger=\"{}\"\nport={}\n{timeout}{}\n",
             probe.section(),
@@ -1133,8 +1199,7 @@ mod tests {
         assert!(config.contains("pop3s=true"));
         assert!(config.contains("[imap]\nname=\"imaps\""));
         assert!(config.contains("imaps=true"));
-        assert!(config.contains("[mqtt]\nname=\"mqtts\""));
-        assert!(config.contains("tls=true"));
+        assert!(!config.contains("[mqtt]")); // MQTT uses the bounded native CONNECT implementation.
     }
 
     #[cfg(unix)]
@@ -1161,6 +1226,7 @@ done
         let config = ServiceDetectionConfig {
             enabled: true,
             zgrab_path: path.to_string_lossy().into_owned(),
+            strategy: crate::types::ServiceDetectionStrategy::Standard,
             ..ServiceDetectionConfig::default()
         };
         let outcome = run(
@@ -1285,6 +1351,36 @@ done
             assert_eq!(detail["truncated"], true);
             assert!(detail.pointer(path).and_then(Value::as_str).is_some());
             assert!(serde_json::to_vec(&detail).unwrap().len() <= 1024);
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn native_probe_cannot_complete_after_the_stage_deadline() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let a = ProbeAttempt {
+            ip: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+            probe: ProbeKind::Vnc,
+        };
+        let config = ServiceDetectionConfig {
+            server_rate_limit: 1000,
+            target_timeout_seconds: 10,
+            ..Default::default()
+        };
+        for _ in 0..16 {
+            let deadline = Instant::now() + Duration::from_millis(30);
+            let result = run_attempts(
+                &config,
+                std::slice::from_ref(&a),
+                "ipv4",
+                &AtomicBool::new(false),
+                deadline,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                result,
+                ProcessOutcome::TimedOut(_, "service_detection_runtime_exceeded")
+            ));
         }
     }
 }

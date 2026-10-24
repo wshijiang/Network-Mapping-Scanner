@@ -113,11 +113,18 @@ pub(crate) async fn execute(
     let mut stdin = child.0.stdin.take().unwrap();
     let id = request.id;
     let expected_stage = request.stage;
-    let max_chunks = input
+    let endpoint_count = input
         .iter()
         .filter(|o| matches!(o, ScanObservation::Port(_)))
-        .count()
-        .div_ceil(request.service.batch_endpoints.max(1));
+        .count();
+    let max_chunks = if input
+        .iter()
+        .any(|o| matches!(o,ScanObservation::Port(p) if p.protocol=="udp"))
+    {
+        endpoint_count
+    } else {
+        endpoint_count.div_ceil(request.service.batch_endpoints.max(1))
+    };
     let resume = std::mem::take(&mut request.checkpoint.observations);
     // A dedicated sender avoids pipe deadlock when the child starts emitting
     // output while the last input frame is still being written.
@@ -299,7 +306,7 @@ mod tests {
             id: uuid::Uuid::nil(),
             sequence: 0,
             body: EventBody::Hello {
-                ipc_version: 1,
+                ipc_version: crate::modules::protocol::IPC_VERSION,
                 stage: ScanStageKind::PortDiscovery,
                 version: "test".into(),
             },

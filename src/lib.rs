@@ -21,6 +21,7 @@ mod scan;
 mod storage;
 mod sysinfo;
 mod types;
+pub mod udp_probe;
 mod upload;
 
 use crate::config::load;
