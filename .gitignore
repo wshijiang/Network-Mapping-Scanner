@@ -31,3 +31,6 @@ trusted-update-keys.json
 /.venv-docs/
 /mkdocs/site/
 /mkdocs/__pycache__/
+
+# Python tooling caches
+__pycache__/

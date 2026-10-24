@@ -102,6 +102,7 @@ cargo run -- --help
 | 服务识别、配置与双栈探测 | [使用指南](docs/USAGE.md) |
 | 模块、CLI 和参数定义 | [维护参考](docs/MAINTENANCE.md) |
 | 模板治理、恢复与诊断 | [文档中心](docs/README.md) |
+| 文档多语言支持 | [中英文档构建](docs/LOCALIZATION.md) |
 
 ## 许可证
 
