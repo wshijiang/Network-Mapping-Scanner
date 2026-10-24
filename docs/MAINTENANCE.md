@@ -12,6 +12,10 @@
 
 可选模块化热更新的具体接口和操作见 [MODULE_UPDATES.md](MODULE_UPDATES.md)。
 
+## CI 工具链版本
+
+Validate scanner 用 rustup 明确安装 Rust 1.99.0（含 rustfmt、Clippy），与 Docker 构建及开发环境一致；Checkout 固定到 v7.0.1 的不可变提交。调整编译器须先验证官方发行版可用，再显式修改安装版本；不要把 Action 仓库的未来版本标签当作已发行的 Rust 编译器。
+
 ## 模块架构
 
 ```

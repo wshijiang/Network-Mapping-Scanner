@@ -2,6 +2,11 @@
 
 [文档中心](README.md) · [部署与升级](DEPLOYMENT.md) · [服务端更新日志](https://github.com/wshijiang/network-mapping/blob/main/docs/CHANGELOG.md)
 
+## 未发布：固定可用的 CI 工具链（2026-10-24）
+
+- 核实工具链依赖 PR 的 Rust 1.120.0 不存在，安装返回 404；Validate scanner 改为 rustup 明确安装 Rust 1.99.0、rustfmt 和 Clippy，与 Docker/开发环境保持一致，编译器版本不再随 Action 标签自动变化。
+- Checkout 固定到已验证的 v7.0.1 提交；保留完整测试、release 二进制构建和 HTTPS 注册恢复检查。
+
 ## 未发布：全部服务自动识别（2026-10-23）
 
 - 默认识别策略为 adaptive，所有已实现 TCP 协议进入自动候选；补齐工业端口映射和工业回退/full exhaustive，HTTPS 自动细分 DoH，完整 RFB Banner 可确认非标准端口 VNC。
