@@ -34,13 +34,13 @@ UDP 主动任务自动尝试 DNS、EtherNet/IP ListIdentity 和 BACnet/IP（仅 
 
 其他 I/O 错误以 Result 错误返回，不伪装成无响应。错误、未确认和取消不得清除已有成功服务证据。
 
-## 后续批次
+## 当前任务与后续范围
 
-DNS TCP/UDP、DoH、DoT 与 VNC 的专项范围和实施顺序见 [服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md)。DNS UDP 仍须完成下述端点迁移和任务协商；DoH/DoT 属于 TCP 上的加密应用识别，不能通过开启 UDP 库 API 获得。该计划的 TCP 首批已接入，UDP 任务现已接入 plan v2，不改变本页独立库 API 的交付范围。
+DNS TCP/UDP、DoH、DoT、VNC 及工业协议的实际范围见[完整支持矩阵](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。DNS/EtherNet/IP/BACnet 主动任务及 EtherNet/IP I/O、OPC UA UADP 的受限被动任务现已接入 plan v2；端点身份增加传输协议，既有部署须先完成配套服务端投影迁移。不能仅修改 TCP 过滤条件来启用 UDP，也不能将独立 NTP/STUN 库 API 当作可下发任务。
 
-工业扩展见[工业与物联网服务识别计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md)：EtherNet/IP UDP/44818 和 BACnet/IP UDP/47808 计划为单播请求/响应；OPC UA UDP PubSub 与 EtherNet/IP UDP/2222 I/O 单独规划被动观察及其能力/数据契约，不向实时 I/O 端口发送探测数据。上述 DNS/EtherNet/IP/BACnet 主动和受限被动协议现已接入 plan v2 任务，精确范围以完整支持矩阵为准；本页的独立公开库 API 与任务引擎分别维护。
+[DNS 扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md)与[工业协议计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md)保留分批设计历史，当前能力以支持矩阵和任务文档为准。被动接收不向 UDP/2222 I/O 端口发送探测，不证明端口开放或会话有效。
 
-第二批先修改服务端 `(scope, IP, port)` 端点身份，加入 tcp/udp，迁移投影和历史证据关联；再加入 port_sets、节点能力、任务恢复、速率和 daisyUI 入口。不能仅删除当前 TCP 过滤条件就开启 UDP。第三批加入 Elasticsearch 原生明文/TLS Transport；第四批扩展 SNMP、NBNS、RPCbind、TFTP、SQL Browser、Memcached、SIP、CoAP，再处理 QUIC/DTLS、发现和专项协议。
+尚待后续交付的范围包括 NTP/STUN 任务接入、Elasticsearch 原生明文/TLS Transport，以及 SNMP、NBNS、RPCbind、TFTP、SQL Browser、Memcached、SIP、CoAP、QUIC/DTLS 等专项协议；不计为本次发布支持。
 
 ## 验证
 

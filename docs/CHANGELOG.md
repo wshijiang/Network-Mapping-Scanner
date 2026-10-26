@@ -1,103 +1,43 @@
 # 扫描端更新日志
 
-[文档中心](README.md) · [部署与升级](DEPLOYMENT.md) · [服务端更新日志](https://github.com/wshijiang/network-mapping/blob/main/docs/CHANGELOG.md)
+[文档中心](README.md) · [配套发布与升级](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)
 
-条目按专题和阶段保留，旧阶段限制不代表当前能力；以最新条目及对应使用文档为准。规划条目不表示功能已实现。
+## v0.1.21（待发布）
 
+发布准备日期：**2026-10-26（北京时间）**。release PR 待审；本地 tag 尚未推送，不表示已发布制品。本节按最终实现汇总原“未发布”阶段记录。
 
-## 未发布：英文文档与资源 404 修复（2026-10-25）
-
-- 默认 MkDocs 构建、预览和部署入口在清理输出后自动构建英文页面、主题资源、语言脚本和搜索索引；统一脚本复用同一入口，兼容自定义输出目录。
-- 统一语言菜单与头部语言链接的路径解析，消除重复语言元数据及子路径下的错误跳转；英文 canonical 基址随根站点推导。
-- 增加默认构建、清理重建、页面资源及双语 HTTP 预览回归，更新中英部署和排障说明。
-
-## 未发布：多语言 review 修复（2026-10-24）
-
-- 文档语言菜单通过白名单 URL 参数保留显式选择，修复 cookie 被禁用或静默拒绝时首页及缺译回退被浏览器偏好覆盖；支持刷新、新标签页和复制链接，并新增脚本回归检查。
-
-## 未发布：中英切换与 MkDocs 多语言（2026-10-24）
-
-- 配套前端实现浏览器首选语言及手动 cookie 的中英切换；本仓库补充文档和构建适配，不修改扫描/服务协议。
-- 新增中文/英文 MkDocs 配置、首批英文首页/部署/维护页、相对语言菜单、缺译回退及统一严格构建命令；修正英文文档根下的源码链接与编辑路径。
-- 更新[语言切换与多语言文档](LOCALIZATION.md)。尚未翻译的专题明确链接中文原文，服务端自由文本、历史证据及既有模板保留原语言。
-
-## 未发布：sha2 0.11 升级适配（2026-10-24）
-
-- 修复 sha2 0.11 摘要输出不再实现 LowerHex 导致诊断、注册和 TLS 指纹编译失败；复用逐字节小写十六进制编码，保持已有摘要及身份状态兼容。
-- 增加标准 SHA-256 已知向量回归；保留诊断快照、注册重启和 TLS 证据验证。
-## 未发布：Hickory 0.26 升级适配（2026-10-24）
-
-- 适配 Hickory 0.26 的解析器构造错误、连接配置、Lookup answer API、MX/SRV 字段与 DNS 消息元数据，修复依赖升级的编译失败。
-- 指定 UDP/TCP 解析器继续固定用户提供的 IP/端口及传输；DNS 响应继续校验事务、问题、类型、长度和记录数上限。新增回环 UDP/TCP 自定义端口、来源元数据与 TTL 回归。
-
-## 未发布：全部服务自动识别（2026-10-23）
-
-- 默认识别策略为 adaptive，所有已实现 TCP 协议进入自动候选；补齐工业端口映射和工业回退/full exhaustive，HTTPS 自动细分 DoH，完整 RFB Banner 可确认非标准端口 VNC。
-- 保留节点探测预算、阶段期限和 TLS 校验；TCP 无需 required_services，UDP 默认协议由服务端规范化后下发，IPv6 不尝试经典 BACnet/IP。
-- 增加全模块默认端口覆盖、工业回退、HTTPS→DoH 细分与预算、RFB 正反例回归。
-
-## 未发布：PR review 与 CI 核验修复（2026-10-23）
-
-- 远程 CI 暴露诊断存储立即重开的偶发锁冲突；阻塞数据库调用在返回完成前显式释放捕获的 Store，并增加多线程连续重开回归，不增加重试或忽略失败。
-- 核实 PR #91 的检查点与期限意见：被动接收改为在固定游标保存包含恢复结果的累计快照，并恢复已观察来源的去重集合，避免多条 ACK 证据被覆盖。
-- 原生 TCP 与 UDP 探测在接受末次结果时重新检查阶段期限；UDP 阶段耗尽不再提交端点完成游标或返回成功。
-- 增加跨重启多来源恢复、原生期限竞争及末端 UDP 超时回归。旧 IPC fixture 意见已由上一提交配套 IPC 3 修复，本轮核对保留。
-
-## 未发布：加密 DNS、工业与 UDP 服务识别（2026-10-23）
-
-- 增加默认验证证书的 DoT/DoH 原生识别，固定目标 IP、合法 SNI/路径、公开 CA；普通 HTTPS/HTML、重定向和不匹配 DNS 不确认 DoH。
-- 增加显式 Modbus TCP、EtherNet/IP、经典 S7comm、OPC UA 最小握手；MQTT/MQTTS 改为原生 3.1.1/5.0 CONNECT/CONNACK，确认合法认证拒绝。
-- plan v2 独立 UDP 任务接入 DNS、EtherNet/IP ListIdentity、BACnet/IP 单播，以及有界 IPv4 实时流量被动接收；不发送 I/O 控制数据，不把沉默标为开放/关闭。
-- 新增 `max_service_probes` 能力和 IPC 3 参数契约，复用期限、限速、取消、ACK 与检查点。新增直接依赖 tokio-rustls/rustls-native-certs/ipnet，复用锁定传递版本；未进行无关升级。
-- 详见[使用说明](USAGE.md)、[模块更新](MODULE_UPDATES.md)和[完整支持矩阵](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。被动协议仅支持文档列出的保守子集，真实设备验收仍需进行。
-
-## 未发布：DNS TCP / VNC 服务探测（2026-10-23）
-
-- 服务识别阶段新增原生 DNS TCP 与 VNC 探测：默认映射 53、5900–5909，支持显式选择协议探测非标准端口；不向 zgrab2 注册未支持的模块。默认服务策略继续识别其他已有协议。
-- DNS 校验 TCP 分帧、随机事务 ID 和根 SOA 问题，合法拒绝响应只证明协议存在；VNC 只接收完整受支持的 RFB 问候，不尝试认证。结果记录 `source=native` 和有界 schema 2 证据。
-- 节点上报 `scan_capabilities.service_protocols`，任务通过 `scan_plan.required_services` 显式选择 DNS/VNC，复用阶段期限、取消、限速、分块 ACK 与检查点。
-- Worker IPC 升为 2，拒绝旧 Worker 静默忽略定向探测参数。启用模块的部署须排空旧 generation 任务，配套升级 Agent、Worker 和完整 IPC 2 模块包；结果上传仍为协议 3。详见[模块更新](MODULE_UPDATES.md)。
-- 已完成合成协议、回环、真实 Worker 及本地回归；未进行线上节点/真实 DNS、VNC 产品验收。本条记录 A 阶段；其后实现见上方扩展条目。
-
-## 未发布：服务识别扩展规划（2026-10-23）
-
-- 补充 [DNS、DoH、DoT 与 VNC 扩展规划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md)入口及 UDP 接入前置条件，明确原生适配器、统一预算、Worker/检查点兼容和协议验收。
-- 本条仅涉及文档，尚未新增对应服务模块或开放 DNS UDP 任务；现有 DNS UDP 仍为独立库 API。
-- 补充[工业服务识别规划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md)：新增协议的有界识别、UDP 发现与被动观察、Worker/恢复及逐协议验收；MQTT/MQTTS 已有模块，作为核验与补强项，不重复计为新增支持。
-
-## 未发布：服务探测第一批（2026-10-22）
-
-- 新增 DNS/NTP/STUN UDP 单播探测库内核，具备事务匹配、连接式来源过滤、超时重试、取消、报文大小和无效响应预算。
-- 仅有效协议响应生成识别结果；超时不判定关闭，证据不保留返回地址、名称或原始报文。
-- 本批没有接入任务/CLI，也未上报 UDP 能力；线上 UDP 需后续先完成任务协商和服务端协议端点迁移。详见 [UDP 探测](UDP_DETECTION.md)及跨仓库分批计划。
-
-## 未发布（自 v0.1.20 以来）
-
-截至 **2026-10-21（北京时间）**，以最新已发布 tag [v0.1.20](https://github.com/wshijiang/Network-Mapping-Scanner/releases/tag/v0.1.20) 为基线，汇总主分支已合入的扫描端变动。
-
-| 比较项 | 固定版本 |
+| 核对项 | 固定范围 |
 | --- | --- |
-| 上次发布 | `v0.1.20`，2026-10-15 发布，提交 `d74f8622f2850cac7ee7a4c1bd098985dd66ceca` |
-| 本次截止 | `main` 的 `8ad7173b1f190c95a9f2ecfd1c0753ea7f7d5112` |
-| 变动范围 | 12 个提交；[查看完整比较](https://github.com/wshijiang/Network-Mapping-Scanner/compare/v0.1.20...8ad7173b1f190c95a9f2ecfd1c0753ea7f7d5112) |
+| 上次发布 | `v0.1.20` · `d74f8622f2850cac7ee7a4c1bd098985dd66ceca` |
+| 本次代码基线 | `386a3b5c8957c7179f0b2f48bc9c8e7c94359fcf`（`main`） |
+| 变动范围 | 23 个提交（含合并提交）；[完整比较](https://github.com/wshijiang/Network-Mapping-Scanner/compare/v0.1.20...386a3b5c8957c7179f0b2f48bc9c8e7c94359fcf) |
 
-### 修复
+本次另含版本、发布说明及文档整理；服务端同时固定配套控制台发布提交。
 
-- **超大握手保留系统线索**：zgrab2 模块结果超过大小预算时，不再只保留状态与错误摘要；在相同 JSON 字节预算内，尽量保留 banner、SSH 软件标识、SMB/会话系统字段及 HTTP `Server` 响应头，维持原有字段路径，供服务端系统识别使用。摘要仍标记 `truncated=true`，不保证超限原文完整。见[修复提交](https://github.com/wshijiang/Network-Mapping-Scanner/commit/72bacdb2af8be27c3e3bce1370768f0fde2a7c5d)。
-- **传递 HTTP 正文截断状态**：服务证据中的 `truncated` 同时考虑模块整体截断和 HTTP/HTTPS 的 `response.body_truncated`，避免正文不完整却被服务端当作完整证据。该改动不增加目标请求。见[修复提交](https://github.com/wshijiang/Network-Mapping-Scanner/commit/22efb37eea76855e1a19d398c30da6bc167b8e7f)。
+### 新增与调整
 
-### 文档与构建
+- **自动服务识别**：默认 adaptive，全部已实现 TCP 协议进入候选；补齐工业端口线索、剩余预算回退及 exhaustive。HTTPS 可细分 DoH，完整受支持 RFB 问候可确认非标准端口 VNC；不保证每个端点执行全部握手。
+- **原生协议**：新增 DNS TCP、验证证书的 DoT/DoH、VNC、Modbus TCP、EtherNet/IP、经典 S7comm、OPC UA 最小握手；MQTT/MQTTS 改为可验证版本和认证拒绝的原生 CONNECT/CONNACK。不执行认证、桌面会话、过程数据读取或控制操作。详见[完整支持矩阵](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。
+- **独立 UDP 任务**：plan v2 接入 DNS、EtherNet/IP ListIdentity、经典 BACnet/IP 单播，以及有界 IPv4 EtherNet/IP I/O / OPC UA UADP 被动接收。主动和被动模式各自默认使用支持的协议集；目标、端口、接收节点和窗口仍需明确配置，沉默不表示开放/关闭。
+- **UDP 库 API**：公开 DNS/NTP/STUN 有界单播内核，具备事务关联、来源过滤、超时重试、取消和报文预算；NTP/STUN 仍未接入任务/CLI。库 API 与任务引擎范围见 [UDP 说明](UDP_DETECTION.md)。
+- **能力与模块契约**：新增 `max_service_probes`、协议能力及 plan v2；Worker IPC 升为 **3**，继续复用期限、取消、限速、分块 ACK 和检查点；结果上传协议保持 **3**。
+- **双语文档**：新增中英首页、部署与语言维护页面，默认 MkDocs 构建/预览/部署同时生成两种语言的页面、资源和搜索索引；支持子路径和显式语言选择，尚未翻译专题链接中文原文。见[语言与文档维护](LOCALIZATION.md)。
 
-- 补充原生部署、systemd、注册、升级恢复和验收指南，整理 Docker、配置、引擎、缓存、远程诊断及模块热更新的阅读路径。见[部署指南](DEPLOYMENT.md)。
-- 新增 MkDocs 文档站、按任务分组的首页与导航，以及将仓库源码相对链接转换为 GitHub URL 的构建钩子。见[文档维护](DOCUMENTATION.md)。
-- Docker 构建阶段的 Go 从 `1.26.8-bookworm` 更新为 `1.27.2-bookworm`，Rust 从 `1.98.0-bookworm` 更新为 `1.99.0-bookworm`；不表示宿主机必须安装这两个 Docker 构建版本。
-- 更新 GitHub Actions：`actions/upload-artifact` v4 → v7、`actions/download-artifact` v4 → v8、`actions/checkout` v5 → v7，并更新 `Swatinem/rust-cache` 的固定提交；Dependabot 目标分支切换为 `main`。
+### 修复与维护
 
-### 升级与兼容注意
+- 超大 zgrab2 握手在同一 JSON 字节预算内尽量保留 Banner、SSH/SMB 系统线索和 HTTP Server 头，继续标记截断；HTTP 正文截断状态向服务端传递，不增加目标请求。
+- 被动接收检查点保存累计结果和已观察来源，避免跨重启多来源 ACK 覆盖；原生 TCP/UDP 接受末次结果时重新检查阶段期限，耗尽时不提交完成游标。
+- 诊断存储异步调用完成前显式释放捕获状态，修复立即重开偶发锁冲突；保留节点身份和恢复数据。
+- 适配 Hickory **0.26** 的解析器、记录和响应 API，保留用户指定 UDP/TCP 地址/端口与 TTL；适配 sha2 **0.11** 的小写十六进制编码，保持摘要、指纹和身份状态兼容。
+- 更新 uuid、thiserror、libc、Rust/Go Docker 构建镜像和 Actions；补齐原生/systemd、模块更新、缓存及诊断文档。
 
-1. 建议先部署配套服务端，再更新扫描器与控制台。服务端的 OS/Web 推断复用已有服务证据；本次扫描器更新改善证据保留与截断表达，不新增扫描模式或注册步骤。
-2. 两项修复仅影响新采集/新生成的结果；已有上传和缓存中丢失的正文或系统字段不能自动恢复，需要重新执行相应服务识别任务。
-3. 升级保留节点身份、状态目录、检查点及待上传结果，按[部署指南](DEPLOYMENT.md)和[扫描与上传恢复](recovery.md)执行停机、替换与验收，不通过清空状态重新注册来完成普通升级。
-4. 环境变量注册、镜像内置 Nuclei 模板、模板锁释放顺序和按架构划分的 Docker `latest` 标签已随 `v0.1.20` 发布，不列为本次新增功能。
+### 升级与兼容
 
-本节仅覆盖扫描端；服务端识别规则、通知和域名发现等变动见配套服务端更新日志。
+1. 先准备服务端 **0.1.30** 并完成[传输端点迁移](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#存储升级与回滚)，再部署 Scanner **0.1.21** 和控制台 **0.1.24**，之后启用新增 UDP/工业协议任务。
+2. 模块部署先暂停分配，排空旧 generation 的任务与检查点，配套替换 Agent、Worker 和完整 IPC **3** 模块包。不得混用 IPC 2/旧 Worker。见[模块升级](MODULE_UPDATES.md)。
+3. 保留节点 ID、令牌、SQLite、状态目录、检查点及待上传结果，按[部署与升级](DEPLOYMENT.md)执行；普通升级不应清空状态或重新注册。已丢失证据只能通过后续任务重新采集。
+4. DoH/DoT/MQTTS 保持证书与服务名验证，公开 CA 可配置；被动协议仅支持矩阵所述子集，经典 BACnet/IP 不支持 IPv6，不发送实时 I/O 控制流量。
+
+本日志不代表真实产品/设备、线上节点或组播网络已完成验收；本次检查和默认忽略的测试见 release PR。
+
+此前发布见 [GitHub Releases](https://github.com/wshijiang/Network-Mapping-Scanner/releases)；本节不重复计入 `v0.1.20` 已交付的功能。

@@ -6,12 +6,16 @@
 
 [快速开始](#快速开始) · [部署指南](docs/DEPLOYMENT.md) · [使用指南](docs/USAGE.md) · [维护参考](docs/MAINTENANCE.md) · [文档中心](docs/README.md)
 
+## 版本与升级
+
+本次准备 **扫描器 0.1.21**，配套服务端 **0.1.30**、扫描器 **0.1.21**、控制台 **0.1.24**。release PR 待审，tag 尚未推送；更新内容见[CHANGELOG](docs/CHANGELOG.md)，升级顺序与合并后 tag 核对见[配套发布指南](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)。既有部署须先完成传输端点迁移，模块套件使用 IPC **3**。
+
 ## 扫描能力
 
 | 阶段 | 引擎 | 输出 |
 | --- | --- | --- |
 | 端口发现 | masscan | 开放端口与协议 |
-| 服务识别 | zgrab2 | 服务、Banner 与应用握手 |
+| 服务识别 | zgrab2 + 原生 TCP/UDP | 服务、Banner、应用握手与有界被动协议证据 |
 | DNS 测绘 | DNS engine | 域名解析观察与记录 |
 | 漏洞检测 | Nuclei | 经筛选的结构化漏洞结果 |
 

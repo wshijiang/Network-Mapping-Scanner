@@ -4,13 +4,17 @@
 
 扫描器负责注册、领取任务、执行扫描引擎并上传结果。首次部署需先准备可访问的服务端，再按下列路径配置和验收节点。
 
+## 本次待发布版本
+
+扫描器 **0.1.21**；配套服务端 **0.1.30**、扫描器 **0.1.21**、控制台 **0.1.24**。变更见[更新日志](CHANGELOG.md)，迁移、IPC 3 与发布次序见[配套发布指南](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)。release PR 待审，不表示制品已发布。
+
 ## 版本更新
 
 | 文档 | 内容 |
 | --- | --- |
 | [更新日志](CHANGELOG.md) | 自上次发布 tag 以来的扫描端变动、固定比较范围与升级兼容注意 |
-| [DNS 与 VNC 服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md) | DNS TCP/VNC 首批已接入；DoH、DoT、UDP 后续接入与恢复验收计划 |
-| [工业与物联网服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md) | 待实现：Modbus TCP、EtherNet/IP、S7、OPC UA、BACnet/IP；已有 MQTT/MQTTS 核验与补强 |
+| [DNS 与 VNC 服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md) | DNS TCP/UDP、DoH/DoT、VNC 已接入；历史分批设计及验收边界 |
+| [工业与物联网服务识别扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md) | Modbus TCP、EtherNet/IP、S7、OPC UA、BACnet/IP 及原生 MQTT/MQTTS；精确子集以支持矩阵为准 |
 
 ## 从这里开始
 
@@ -37,7 +41,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [配置与使用](USAGE.md) | 扫描模式、引擎配置、远程参数、重连和双栈探测 |
-| [UDP 探测内核与后续接入](UDP_DETECTION.md) | 当前 DNS/NTP/STUN 库 API、验证与未开放的任务链路 |
+| [UDP 服务识别与独立内核](UDP_DETECTION.md) | 已接入 plan v2 的主动/被动任务；NTP/STUN 仍仅为库 API |
 | [masscan 适配与迁移](MASSCAN.md) | 官方 list 输出、兼容模式、切换验证和回滚 |
 | [Nuclei 部署与运维](NUCLEI.md) | 模板治理、参数语义、结果协议和上线检查 |
 | [目标执行反馈](PERFORMANCE.md) | 连接采样、失败分类与兼容升级 |
