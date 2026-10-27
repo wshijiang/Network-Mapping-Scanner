@@ -39,6 +39,8 @@ Each node needs its own identity and state directory. The default database is `.
 
 Confirm trusted HTTPS access, successful registration/heartbeats and advertised engine/address-family capabilities. A process or open port alone does not prove operation. Run an authorized representative task and confirm results, cancellation and recovery before rollout.
 
+Interrupted heartbeat or task response bodies are retried with backoff; a complete response that cannot be decoded remains a protocol error. An unrecoverable runtime error exits with a nonzero status, allowing a supervisor configured to restart on failure to restart the scanner. A normal SIGINT shutdown exits successfully. Inspect logs and correct persistent failures, and retain the state directory for recovery.
+
 Agent, Worker and module packages must be compatible. Current native service expansion uses IPC 3; legacy IPC 2 and UDP-library-only notes describe historical stages. Follow [module upgrade instructions (Chinese)](https://github.com/wshijiang/Network-Mapping-Scanner/blob/main/docs/MODULE_UPDATES.md) and the [current protocol matrix](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md), including server transport-endpoint migration.
 
 Preserve identity, leases, checkpoints, diagnostics and pending uploads. Stop and replace according to the [recovery guide (Chinese)](https://github.com/wshijiang/Network-Mapping-Scanner/blob/main/docs/recovery.md); do not re-register merely to upgrade. Protocol evidence, authentication rejection and passive observations do not imply successful login, ownership or an open source port.

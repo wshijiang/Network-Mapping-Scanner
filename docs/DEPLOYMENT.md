@@ -203,6 +203,8 @@ sudo journalctl -u network-mapping-scanner -n 100 --no-pager
 
 `network-online.target` 不保证远端 API 已就绪，短暂网络故障由重连逻辑处理。NET_RAW 是否足够还需对实际接口、引擎和任务验证；不要直接增加 privileged 或全部能力排障。引擎验证失败可能保持进程和心跳在线，但 `accepting_tasks=false`，不能只以 systemd 的 active 状态验收。
 
+运行期间遇到不可恢复的错误（例如状态库操作失败或服务端拒绝运行凭据）时，扫描器记录原因并以非零状态退出，以上 `Restart=on-failure` 会触发重启；重复失败时应检查日志并修复根因。前台 Ctrl+C 和示例中的 SIGINT 停止属于正常停机，返回零。持久化结果和检查点应保留，以便后续恢复。
+
 ## 升级与恢复
 
 1. 记录二进制、引擎、模板版本和当前配置；确认目标版本的结果协议及 SQLite 迁移。先升级并验收服务端，再对一个扫描节点试升级，通过后逐批扩展。

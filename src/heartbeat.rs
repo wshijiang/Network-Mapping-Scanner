@@ -1,5 +1,5 @@
 use crate::error::{MaintenanceInfo, ScannerError, ServerError};
-use crate::http_client::{ServerHttpClient, response_decode_error, response_error};
+use crate::http_client::{ServerHttpClient, response_error, response_json};
 use crate::network::{NetworkCapabilities, SharedNetworkCapabilities};
 use crate::runtime_config::{RuntimeConfiguration, fetch_configuration};
 use crate::scan::ScanCapabilities;
@@ -371,10 +371,8 @@ impl HeartbeatClient {
                 .await
                 .into());
         }
-        let response: MaintenanceProbeResponse = response
-            .json()
-            .await
-            .map_err(|error| response_decode_error(error, "check system maintenance"))?;
+        let response: MaintenanceProbeResponse =
+            response_json(response, "check system maintenance").await?;
         if !response.success {
             return Err(ServerError::InvalidResponse {
                 operation: "check system maintenance",
@@ -463,10 +461,7 @@ impl HeartbeatClient {
         let latency = parse_latency_response(response.headers(), probe_id, elapsed);
         tracing::debug!(status = %response.status(), state, "heartbeat endpoint responded");
         if response.status().is_success() {
-            let response = response
-                .json()
-                .await
-                .map_err(|error| response_decode_error(error, "send heartbeat"))?;
+            let response = response_json(response, "send heartbeat").await?;
             if let Some(latency) = &latency {
                 tracing::debug!(
                     rtt_ms = latency.rtt_us as f64 / 1_000.0,

@@ -1,5 +1,5 @@
 use crate::error::{ScannerError, ServerError};
-use crate::http_client::{ServerHttpClient, response_decode_error, response_error};
+use crate::http_client::{ServerHttpClient, response_error, response_json};
 use crate::types::{
     AppConfig, DnsConfig, MasscanConfig, NucleiConfig, ServiceDetectionConfig,
     ServiceDetectionStrategy,
@@ -327,10 +327,8 @@ pub(crate) async fn fetch_configuration(
             .await
             .into());
     }
-    let response: RuntimeConfigurationResponse = response
-        .json()
-        .await
-        .map_err(|error| response_decode_error(error, "fetch runtime configuration"))?;
+    let response: RuntimeConfigurationResponse =
+        response_json(response, "fetch runtime configuration").await?;
     if !response.success {
         return Err(ServerError::InvalidResponse {
             operation: "fetch runtime configuration",

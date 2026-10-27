@@ -2,7 +2,7 @@ use crate::error::{MaintenanceInfo, ServerError};
 use crate::types::AssignedTask;
 use reqwest::header::{HeaderMap, RETRY_AFTER};
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
 const USER_AGENT: &str = "Scanner/1.0";
@@ -171,10 +171,7 @@ async fn fetch_task_from_endpoint(
     }
     match status {
         StatusCode::OK => {
-            let task = response
-                .json::<AssignedTask>()
-                .await
-                .map_err(|error| response_decode_error(error, operation))?;
+            let task = response_json::<AssignedTask>(response, operation).await?;
             tracing::debug!(
                 task_id = %task.task_id,
                 target_count = task.task_target.len(),
@@ -248,15 +245,20 @@ pub(crate) async fn response_error(response: Response, operation: &'static str) 
     classify_status(status, detail, retry_after, request_id, operation)
 }
 
-pub(crate) fn response_decode_error(error: reqwest::Error, operation: &'static str) -> ServerError {
-    let detail = error.to_string();
-    if error.is_timeout() {
-        ServerError::Timeout { operation, detail }
-    } else if error.is_connect() {
-        ServerError::Connect { operation, detail }
-    } else {
-        ServerError::InvalidResponse { operation, detail }
-    }
+pub(crate) async fn response_json<T: DeserializeOwned>(
+    response: Response,
+    operation: &'static str,
+) -> Result<T, ServerError> {
+    // reqwest marks both body-read and JSON-deserialization failures as decode
+    // errors. Read first so a broken connection remains retryable.
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| request_error(error, operation))?;
+    serde_json::from_slice(&bytes).map_err(|error| ServerError::InvalidResponse {
+        operation,
+        detail: error.to_string(),
+    })
 }
 
 fn request_error(error: reqwest::Error, operation: &'static str) -> ServerError {
@@ -389,13 +391,76 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FetchTaskOutcome, ServerHttpClient, classify_status, parse_error_code,
-        parse_maintenance_response, parse_retry_after, task_outcome_without_body,
+        FetchTaskOutcome, ServerHttpClient, classify_status, fetch_task, parse_error_code,
+        parse_maintenance_response, parse_retry_after, response_json, task_outcome_without_body,
     };
     use crate::error::ServerError;
     use reqwest::StatusCode;
     use reqwest::header::RETRY_AFTER;
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn fixture_response(body: &'static str, content_length: usize) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let received = socket.read(&mut request).await.unwrap();
+            assert!(received > 0);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n{body}"
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        format!("http://{address}/")
+    }
+
+    fn test_client() -> ServerHttpClient {
+        ServerHttpClient::new(
+            true,
+            "token".into(),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn interrupted_task_response_is_retryable_transport_error() {
+        // Declaring more bytes than sent simulates a connection closing while
+        // the server's successful response is still being read.
+        let url = fixture_response("{\"task_id\":", 100).await;
+        let error = match fetch_task(&test_client(), &url).await {
+            Err(error) => error,
+            Ok(_) => panic!("truncated response must fail"),
+        };
+        assert!(matches!(error, ServerError::Transport { .. }));
+        assert!(error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn complete_invalid_json_remains_a_non_retryable_protocol_error() {
+        let body = "{invalid}";
+        let url = fixture_response(body, body.len()).await;
+        let error = match fetch_task(&test_client(), &url).await {
+            Err(error) => error,
+            Ok(_) => panic!("invalid response must fail"),
+        };
+        assert!(matches!(error, ServerError::InvalidResponse { .. }));
+        assert!(!error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn complete_json_is_deserialized_after_body_read() {
+        let body = "{\"success\":true}";
+        let url = fixture_response(body, body.len()).await;
+        let response = test_client().get(&url, "test").await.unwrap();
+        let value: serde_json::Value = response_json(response, "test").await.unwrap();
+        assert_eq!(value["success"], true);
+    }
+
     #[test]
     fn retry_after_delta_seconds_are_parsed() {
         let mut headers = reqwest::header::HeaderMap::new();

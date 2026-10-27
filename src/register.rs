@@ -1,5 +1,5 @@
 use crate::error::{ScannerError, ServerError};
-use crate::http_client::{ServerHttpClient, response_decode_error, response_error};
+use crate::http_client::{ServerHttpClient, response_error, response_json};
 use std::time::Duration;
 
 #[derive(Debug, serde::Serialize)]
@@ -46,10 +46,7 @@ pub(crate) async fn register(
 
     match response.status().as_u16() {
         200 => {
-            let response: RegisterResponse = response
-                .json()
-                .await
-                .map_err(|error| response_decode_error(error, "register scanner"))?;
+            let response: RegisterResponse = response_json(response, "register scanner").await?;
             if response.runtime_token.is_empty() {
                 return Err(ServerError::InvalidResponse {
                     operation: "register scanner",

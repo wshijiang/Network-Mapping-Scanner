@@ -256,6 +256,8 @@ pub(crate) async fn fetch_task(client: &ServerHttpClient, url: &str) -> Result<F
 任务领取、心跳、任务状态上报和结果上传共享一个 `reqwest::Client`。客户端统一设置建连与
 全请求超时，并把网络错误和 HTTP 响应分类为可重试故障、认证拒绝、策略拒绝及任务语义
 冲突。408、429 和 5xx 可重试；429 会读取 `Retry-After`。
+心跳和任务响应先读取完整响应体再解析 JSON：读取中断按传输故障重试，完整但格式无效的
+响应按协议错误处理。运行时不可恢复的停止返回非零退出码，正常 SIGINT 停止返回零。
 
 #### `reconnect.rs`
 

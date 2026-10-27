@@ -318,7 +318,7 @@ impl DiagnosticsRuntime {
                         operation = "diagnostics",
                         "diagnostics worker stopped unexpectedly"
                     );
-                    crate::request_stop();
+                    crate::request_failure_stop();
                     break;
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -333,23 +333,27 @@ impl DiagnosticsRuntime {
     pub async fn stop(self, clean: bool) {
         flush_capture().await;
         // Shutdown signal also interrupts an in-flight upload. Preserve its snapshot and job.
-        let mut worker = self.worker;
-        if tokio::time::timeout(Duration::from_secs(5), &mut worker)
-            .await
-            .is_err()
-        {
-            worker.abort();
-        }
-        let mut events_worker = self.events_worker;
-        if tokio::time::timeout(Duration::from_secs(5), &mut events_worker)
-            .await
-            .is_err()
-        {
-            events_worker.abort();
-        }
+        stop_worker(self.worker, "diagnostics").await;
+        stop_worker(self.events_worker, "diagnostics events").await;
         if clean {
             let _ = self.store.clean_shutdown().await;
         }
+    }
+}
+
+async fn stop_worker(mut worker: tokio::task::JoinHandle<()>, name: &'static str) {
+    let result = match tokio::time::timeout(Duration::from_secs(5), &mut worker).await {
+        Ok(result) => result,
+        Err(_) => {
+            worker.abort();
+            worker.await
+        }
+    };
+    if let Err(error) = result
+        && error.is_panic()
+    {
+        tracing::error!(event = "ScannerDiagnosticsWorkerPanicked", worker = name, %error, "diagnostics worker panicked");
+        crate::request_failure_stop();
     }
 }
 
