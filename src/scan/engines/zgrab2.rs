@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStderr, Command};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
@@ -300,43 +300,52 @@ async fn run_attempts(
         }
     };
     let gap = Duration::from_secs_f64(1.0 / f64::from(config.server_rate_limit.max(1)));
+    let native: Vec<_> = attempts.iter().filter(|a| a.probe.is_native()).collect();
+    let mut running = JoinSet::new();
+    let mut completed = Vec::new();
+    let mut next = 0;
+    let mut next_start = Instant::now() + gap;
     let mut progress = tokio::time::interval(Duration::from_secs(30));
-    for attempt in attempts.iter().filter(|a| a.probe.is_native()) {
-        let wait = async {
-            sleep(gap).await;
-            super::native::probe(attempt, config, deadline).await
-        };
-        tokio::pin!(wait);
-        let result = loop {
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(ProcessOutcome::Cancelled);
-            }
-            tokio::select! {
-                result = &mut wait => break result,
-                _ = progress.tick() => tracing::info!(event="ServiceDetectionProgress", completed_probes=evidence.len(), "native service probes progressing"),
-                _ = sleep(Duration::from_millis(20)) => {},
-                _ = tokio::time::sleep_until(deadline) => return Ok(ProcessOutcome::TimedOut(evidence, "service_detection_runtime_exceeded")),
-            }
-        };
-        evidence.push(result);
-        // The probe and scheduler timers may both become ready at the stage
-        // deadline. Completion cannot turn stage expiry into a target timeout.
+    while next < native.len() || !running.is_empty() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(ProcessOutcome::Cancelled);
         }
         if Instant::now() >= deadline {
+            completed.sort_by_key(|(index, _)| *index);
+            evidence.extend(completed.into_iter().map(|(_, result)| result));
             return Ok(ProcessOutcome::TimedOut(
                 evidence,
                 "service_detection_runtime_exceeded",
             ));
         }
-        if evidence.len().is_multiple_of(100) {
-            tracing::info!(
-                event = "ServiceDetectionProgress",
-                native_probes = evidence.len(),
-                "native service probes progressing"
-            );
+        tokio::select! {
+            _ = tokio::time::sleep_until(next_start), if next < native.len() && running.len() < config.senders.max(1) as usize => {
+                let attempt = native[next].clone();
+                let probe_config = config.clone();
+                let index = next;
+                running.spawn(async move { (index, super::native::probe(&attempt, &probe_config, deadline).await) });
+                next += 1;
+                next_start = Instant::now() + gap;
+            }
+            result = running.join_next(), if !running.is_empty() => {
+                let result = result.expect("nonempty probe set").map_err(|error| ScannerError::Scan(format!("native probe task failed: {error}")))?;
+                completed.push(result);
+            }
+            _ = progress.tick() => tracing::info!(event="ServiceDetectionProgress", completed_probes=completed.len(), total_probes=native.len(), in_flight=running.len(), "native service probes progressing"),
+            _ = sleep(Duration::from_millis(20)) => {},
+            _ = tokio::time::sleep_until(deadline) => {},
         }
+    }
+    completed.sort_by_key(|(index, _)| *index);
+    evidence.extend(completed.into_iter().map(|(_, result)| result));
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(ProcessOutcome::Cancelled);
+    }
+    if Instant::now() >= deadline {
+        return Ok(ProcessOutcome::TimedOut(
+            evidence,
+            "service_detection_runtime_exceeded",
+        ));
     }
     Ok(ProcessOutcome::Completed(evidence))
 }
@@ -1382,5 +1391,47 @@ done
                 ProcessOutcome::TimedOut(_, "service_detection_runtime_exceeded")
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn native_probes_run_concurrently_when_an_endpoint_stalls() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            let (mut second, _) = listener.accept().await.unwrap();
+            first.write_all(b"RFB 003.008\n").await.unwrap();
+            second.write_all(b"RFB 003.008\n").await.unwrap();
+        });
+        let attempt = ProbeAttempt {
+            ip: "127.0.0.1".into(),
+            port,
+            probe: ProbeKind::Vnc,
+        };
+        let config = ServiceDetectionConfig {
+            senders: 2,
+            server_rate_limit: 1000,
+            target_timeout_seconds: 5,
+            ..Default::default()
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_attempts(
+                &config,
+                &[attempt.clone(), attempt],
+                "ipv4",
+                &AtomicBool::new(false),
+                Instant::now() + Duration::from_secs(5),
+            ),
+        )
+        .await
+        .expect("both probes should start before either finishes")
+        .unwrap();
+        let ProcessOutcome::Completed(evidence) = result else {
+            panic!("probes did not complete")
+        };
+        assert_eq!(evidence.len(), 2);
+        assert!(evidence.iter().all(|item| item.status == "success"));
+        server.await.unwrap();
     }
 }
