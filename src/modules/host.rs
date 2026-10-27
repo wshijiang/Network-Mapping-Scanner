@@ -73,28 +73,11 @@ async fn spawn(
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
-    let deadline = Instant::now() + Duration::from_millis(250);
-    loop {
-        match command.spawn() {
-            Ok(child) => {
-                return Ok(Process {
-                    child,
-                    _workspace: workspace,
-                });
-            }
-            Err(error)
-                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
-                    && Instant::now() < deadline =>
-            {
-                // A concurrent fork may briefly inherit a writable descriptor until exec.
-                // Retry only ETXTBSY; permanent errors remain immediately visible.
-                sleep(Duration::from_millis(5)).await;
-            }
-            Err(error) => {
-                return Err(error.into());
-            }
-        }
-    }
+    let child = crate::process::spawn(&mut command).await?;
+    Ok(Process {
+        child,
+        _workspace: workspace,
+    })
 }
 
 fn check_hello(event: Event, stage: ScanStageKind) -> Result<(), ScannerError> {

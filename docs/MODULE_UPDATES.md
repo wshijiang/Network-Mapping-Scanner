@@ -51,7 +51,7 @@ Agent 和维护命令必须使用相同配置、工作目录和文件账号。Wo
 遇到 `module store is in use by the running agent`，仍应检查是否确有另一 Agent 使用同一状态库；
 不要删除锁文件或状态数据库来绕过独占保护。
 
-Linux 在并行 fork/exec 时可能短暂返回 `Text file busy`（`ETXTBSY`）。Worker 启动仅对此错误
+Linux 在并行 fork/exec 时可能短暂返回 `Text file busy`（`ETXTBSY`）。Worker 与 masscan/zgrab2/Nuclei 引擎启动共用同一策略，仅对此错误
 进行最多约 250 毫秒的异步重试，期间不修改制品；预检和正式执行使用相同策略。
 持续占用会返回原始错误，需检查是否有程序仍以写入模式打开 Worker。
 路径不存在、权限不足等错误不会重试；启动失败或等待期间取消会清理本次临时工作目录。

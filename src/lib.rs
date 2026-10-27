@@ -13,6 +13,7 @@ mod modules;
 mod network;
 mod nuclei_templates;
 mod performance;
+mod process;
 mod reconnect;
 mod register;
 mod registration_env;

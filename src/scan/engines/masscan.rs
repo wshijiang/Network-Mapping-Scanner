@@ -131,8 +131,8 @@ pub(crate) async fn run(
         "spawning masscan process"
     );
     let started_at = Instant::now();
-    let mut child = scanner_command(path, config, target)
-        .spawn()
+    let mut child = crate::process::spawn(&mut scanner_command(path, config, target))
+        .await
         .map_err(|e| ScannerError::Scan(format!("failed to spawn scanner: {e}")))?;
     let process_id = child.id();
     let stdout = child
@@ -931,6 +931,31 @@ while [ "$i" -lt 3000 ]; do printf 'open tcp 443 192.0.2.1 1\n'; i=$((i + 1)); d
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn transient_busy_scanner_still_reports_invalid_output() {
+        let scanner = TestScanner::new("printf 'open tcp broken 192.0.2.1 1\\n'");
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&scanner.path)
+            .unwrap();
+        let release = async {
+            sleep(Duration::from_millis(30)).await;
+            drop(writer);
+        };
+        let cancel = AtomicBool::new(false);
+        let config = standard_config();
+        let (result, _) = tokio::join!(scanner.run(&config, &cancel), release);
+        assert!(matches!(
+            result,
+            Err(ScannerError::ExternalProcess {
+                code: "masscan_invalid_output",
+                invalid_line_count: 1,
+                ..
+            })
+        ));
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn damaged_output_is_an_error_even_after_valid_results() {
@@ -942,15 +967,19 @@ while [ "$i" -lt 3000 ]; do printf 'open tcp 443 192.0.2.1 1\n'; i=$((i + 1)); d
             "i=0; while [ \"$i\" -lt 5000 ]; do printf x; i=$((i + 1)); done",
         ] {
             let scanner = TestScanner::new(script);
+            let outcome = scanner
+                .run(&standard_config(), &AtomicBool::new(false))
+                .await;
             let Err(ScannerError::ExternalProcess {
                 code,
                 invalid_line_count,
                 ..
-            }) = scanner
-                .run(&standard_config(), &AtomicBool::new(false))
-                .await
+            }) = outcome
             else {
-                panic!("invalid output must fail")
+                match outcome {
+                    Err(error) => panic!("expected output error, got {error}; script={script:?}"),
+                    Ok(_) => panic!("invalid output unexpectedly succeeded; script={script:?}"),
+                }
             };
             assert!(matches!(
                 code,
