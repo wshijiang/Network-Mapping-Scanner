@@ -205,7 +205,6 @@ impl ProbeKind {
         matches!(
             self,
             Self::Dns
-                | Self::Rdp
                 | Self::Vnc
                 | Self::Dot
                 | Self::Doh
@@ -421,16 +420,16 @@ pub(crate) fn aggregate(
                 service: selected.map(|candidate| candidate.service.clone()),
                 banner,
                 source: if selected_evidence
-                    .is_some_and(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts" | "rdp"))
+                    .is_some_and(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
                     || evidence
                         .iter()
-                        .all(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts" | "rdp"))
+                        .all(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
                 {
                     "native"
                 } else if selected_evidence.is_none()
                     && evidence
                         .iter()
-                        .any(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts" | "rdp"))
+                        .any(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
                 {
                     "service_detection"
                 } else {
@@ -464,6 +463,7 @@ fn retained_handshake(item: &ProbeEvidence) -> Value {
     json!({
         "role": role,
         "module": item.module,
+        "status": item.status,
         "result": result,
         "truncated": truncated,
     })
@@ -557,13 +557,39 @@ fn confident_endpoints(
         .collect()
 }
 
+// New zgrab2 can fail during TLS/NTLM after a valid RDP negotiation.
+// Preserve that identification without treating arbitrary failed probes as matches.
+fn rdp_negotiated_before_error(item: &ProbeEvidence) -> bool {
+    item.module == "rdp"
+        && matches!(
+            item.status.as_str(),
+            "handshake-error"
+                | "protocol-error"
+                | "application-error"
+                | "connection-closed"
+                | "connection-timeout"
+                | "io-timeout"
+                | "unknown-error"
+        )
+        && matches!(
+            item.detail
+                .pointer("/result/selected_protocol")
+                .and_then(Value::as_str),
+            Some("ssl" | "hybrid" | "hybrid_ex")
+        )
+        && item
+            .detail
+            .pointer("/result/negotiation_flags")
+            .is_some_and(Value::is_object)
+}
+
 fn candidates_for(
     evidence: &[&ProbeEvidence],
     strategy: ServiceDetectionStrategy,
 ) -> Vec<Candidate> {
     let mut candidates = Vec::new();
     for (index, item) in evidence.iter().enumerate() {
-        if item.status != "success" {
+        if item.status != "success" && !rdp_negotiated_before_error(item) {
             continue;
         }
         let probe = ProbeKind::from_name(&item.module);
@@ -682,16 +708,29 @@ mod tests {
     }
 
     #[test]
-    fn rdp_is_native_and_retains_negotiation_evidence() {
-        assert!(ProbeKind::Rdp.is_native());
-        let mut item = evidence("rdp", 3389, "success", None);
-        item.detail = json!({"result":{"confirmation":"rdp_negotiation_failure","failure_code":5}});
-        let observations = aggregate(&[item], &ServiceDetectionConfig::default());
-        assert_eq!(observations[0].service.as_deref(), Some("rdp"));
-        assert_eq!(observations[0].source, "native");
+    fn rdp_negotiation_survives_later_fingerprint_failure() {
+        let mut item = evidence("rdp", 13389, "handshake-error", None);
+        item.detail = json!({"result":{"selected_protocol":"hybrid","negotiation_flags":{}}});
+        let result = aggregate(&[item.clone()], &ServiceDetectionConfig::default());
+        assert_eq!(result[0].service.as_deref(), Some("rdp"));
+        assert_eq!(result[0].source, "zgrab2");
         assert_eq!(
-            observations[0].data.as_ref().unwrap()["evidence"][0]["result"]["failure_code"],
-            5
+            result[0].data.as_ref().unwrap()["evidence"][0]["status"],
+            "handshake-error"
+        );
+        for selected in ["standard_rdp", "unknown(0x80)", ""] {
+            item.detail["result"]["selected_protocol"] = json!(selected);
+            assert!(
+                aggregate(&[item.clone()], &ServiceDetectionConfig::default())[0]
+                    .service
+                    .is_none()
+            );
+        }
+        item.detail = json!({"result":{}});
+        assert!(
+            aggregate(&[item], &ServiceDetectionConfig::default())[0]
+                .service
+                .is_none()
         );
     }
 

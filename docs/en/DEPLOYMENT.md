@@ -6,7 +6,7 @@
 
 Deploy PostgreSQL, Elasticsearch, the Network Mapping server and Web console before installing scanner nodes. Scanners connect to the server over trusted HTTPS; they do not need direct PostgreSQL or Elasticsearch access.
 
-Linux source/release installations require the relevant external engines: masscan for ports, zgrab2 for service detection, and Nuclei plus reviewed signed templates for vulnerability scans. Release archives contain the Rust programs, not those external engines. The container image includes pinned engines and official templates; see the [Docker guide (Chinese)](https://github.com/wshijiang/Network-Mapping-Scanner/blob/main/docs/DOCKER.md).
+Linux source/release installations require the relevant external engines: masscan for ports, zgrab2 at commit `835aa53808aed88b4c3e017d623b374fb26dca95` for service detection (v1.0.0 lacks RDP), and Nuclei plus reviewed signed templates for vulnerability scans. Release archives contain the Rust programs, not those external engines. The container image includes pinned engines and official templates; see the [Docker guide (Chinese)](https://github.com/wshijiang/Network-Mapping-Scanner/blob/main/docs/DOCKER.md).
 
 ```sh
 git clone https://github.com/wshijiang/Network-Mapping-Scanner.git

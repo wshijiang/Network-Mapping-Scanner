@@ -12,17 +12,18 @@ This is the English entry point for the scanner component. The first translated 
 
 This component is preparing **0.1.21**, paired with server **0.1.30**, scanner **0.1.21**, and web console **0.1.24**. Release PRs remain open for review; version tags are local only. Existing installations must complete the transport endpoint migration before enabling new UDP tasks. Upgrade the Agent, Worker and complete module bundle together to IPC **3**, retaining node identity and pending results. See the [release and upgrade procedure (Chinese)](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md) and the change log above for scope, rollback and tag checks after merging.
 
-## Service detection fixes
+## Service detection engine upgrade
 
-RDP now uses native TPKT/X.224 negotiation on TCP/3389 or an explicitly selected custom port.
-A validated negotiation response or rejection identifies the service; no credentials, TLS/CredSSP
-session or desktop session are attempted. Bare legacy X.224 confirms remain unidentified to avoid
-confusing RDP with other protocols. Automatic detection on custom ports remains subject to probe budgets.
-The pinned zgrab2 build has no RDP module, so RDP is excluded from its INI configuration. External
-configurations include only modules used in the current batch. Upgrade the matching Agent, Worker and
-module bundle; see the [usage and troubleshooting guide (Chinese)](../USAGE.md).
-Native TCP and active UDP evidence now also removes NUL characters and enforces `max_result_bytes`,
-marking truncated evidence instead of allowing invalid database strings or oversized handshake details.
+The scanner pins zgrab2 master snapshot `835aa53808aed88b4c3e017d623b374fb26dca95` (2026-10-22 UTC),
+including upstream RDP support. The latest official release v1.0.0 does not contain RDP and is not
+compatible with this scanner's RDP configuration. Upgrade the engine in native installations and
+module bundles together with the Agent and Worker; container builds already pin the full revision.
+RDP now collects negotiation, conditional TLS certificates and NTLM Challenge fingerprints without
+submitting login credentials or opening a desktop session. Confirmed negotiation survives subsequent
+TLS/NTLM errors, with the original status retained in `evidence[].status`. Certificate collection does
+not establish trust. Large results retain compact negotiation/NTLM fields where possible.
+See the [build, verification and usage guide (Chinese)](../USAGE.md).
+Native TCP and active UDP evidence retains NUL cleanup and `max_result_bytes` limits.
 
 ## Related components
 

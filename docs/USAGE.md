@@ -64,26 +64,49 @@ UDP 使用 plan v2 的 `udp_inventory`（DNS、EtherNet/IP UDP/44818、经典 BA
 
 ## RDP 识别与故障排查
 
-RDP 使用扫描器原生探测，默认端口为 TCP/3389，也可在服务识别任务中选择 `rdp` 并指定自定义端口。
-探测只发送 TPKT/X.224 连接请求及 RDP 协商请求，接受严格匹配的协商响应或 RDP 协商拒绝；
-`source=native`，握手证据包含 `confirmation` 及 `selected_protocol` 或 `failure_code`。
-协商拒绝说明目标使用 RDP，不表示允许登录；不发送凭据、不完成 TLS/CredSSP 或建立桌面会话，
-不能据此判断认证成功、证书有效或操作系统版本。仅返回旧式 X.224 确认而不带 RDP 协商数据的目标
-保持未确认，避免与 S7 等使用 X.224 的服务混淆。
+服务识别使用固定的 zgrab2 最新主分支快照 `835aa53808aed88b4c3e017d623b374fb26dca95`（2026-10-22 UTC）。
+截至 2026-10-27，官方最新 Release 仍为 v1.0.0；该旧版不包含 RDP，不能作为本版本的替代依赖。
+镜像已固定完整 SHA；独立安装和模块包也应使用同一提交，并配套升级 Agent、Worker 和引擎。
 
-原生探测复用连接/目标超时、阶段累计期限、取消和限速。默认 adaptive 的 8 次预算不保证在未知
-非标准端口尝试 RDP；需要确定执行时显式选择 `rdp`，或使用有足够预算的 exhaustive 策略。
+RDP 交给 zgrab2 的 `rdp` 模块，默认端口 TCP/3389；显式选择 `rdp` 可探测自定义端口。
+模块进行 X.224/RDP 协商，按服务端选择继续 TLS 证书采集及 CredSSP/NTLM Challenge 指纹采集，
+不提交用户登录凭据、不建立桌面会话。证据 `source=zgrab2`，`selected_protocol`、`failure_code`
+为上游字符串枚举，`negotiation_flags` 为对象，可选的 `tls`、`ntlm` 保留上游结构。
+证书采集不代表证书可信；NTLM 系统版本字段不保证已被服务端投影为操作系统标签。
 
-旧版本出现 `could not find option group` 且涉及 `rdp`，说明生成的 INI 与 zgrab2 模块不兼容，
-不是目标拒绝远程桌面连接。当前镜像固定的 v1.0.0 不含 RDP；上游 `master` 已通过
-[PR #644](https://github.com/zmap/zgrab2/pull/644) 加入 RDP、TLS 和可选 NTLM 指纹，但截至
-2026-10-27 官方最新 Release 仍为 v1.0.0。本实现保持固定依赖版本，使用原生最小协商。
-升级配套 Agent/Worker 和模块包后，RDP 不再交给 zgrab2；
-外部引擎配置只包含本批使用的模块。只运行原生协议的探测批次不启动 zgrab2，
-混合/自动任务仍需要正确安装 zgrab2，并遵循节点的启动依赖检查。
+协商拒绝仍能确认 RDP；已协商 `ssl`/`hybrid`/`hybrid_ex` 后 TLS 或 NTLM 失败时，
+节点仍保留 RDP 服务类型，同时在 `evidence[].status` 保留原始失败状态。
+无协商证据的失败不识别为 RDP。旧式 Standard RDP 的识别遵循上游模块行为。
+阶段期限、连接/目标超时、取消与限速继续生效；默认 adaptive 的 8 次预算不保证未知
+非标准端口会尝试 RDP，需要确定执行时显式选择该协议。
 
-原生 TCP 与主动 UDP 握手也应用 `max_result_bytes`，清理字符串中的 NUL 并标记截断。
-截断后仍可保留已确认的服务名，但详情可能缺失；需要完整证据时可在允许范围内提高预算后重扫。
+出现 `could not find option group` 且涉及 `rdp`，先核对正在运行的 zgrab2 是否为上述提交。
+外部引擎配置只包含本批使用的模块；升级时需同时替换模块包中的引擎，不能只替换 Agent。
+
+原生 TCP 与主动 UDP 握手继续应用 `max_result_bytes`，清理 NUL 并标记截断。
+超大 RDP 握手尽量保留协商字段及 `ntlm` 名称/版本字段；TLS 大字段可能被裁剪。
+截断后仍可保留服务名，但详情可能缺失；需要完整证据时可提高允许的预算后重扫。
+
+### 独立安装与兼容性验证
+
+使用 Go 1.27.2（至少满足上游 go.mod 的 Go 1.26 要求）从固定提交构建：
+
+```sh
+git clone https://github.com/zmap/zgrab2.git
+cd zgrab2
+git checkout --detach 835aa53808aed88b4c3e017d623b374fb26dca95
+go build -mod=readonly -trimpath -o zgrab2 ./cmd/zgrab2
+./zgrab2 rdp --help
+```
+
+按照上游安装说明配置 blocklist，并将扫描器 `zgrab_path` 指向安装后的绝对路径。
+源码维护者可从扫描器仓库执行下面的真实引擎测试；仅测试本机回环夹具，测试内部使用空 blocklist：
+
+```sh
+ZGRAB2_TEST_BINARY=/absolute/path/to/zgrab2 cargo test --locked --lib real_zgrab -- --ignored
+```
+
+测试验证所有外部模块的实际 INI 解析，以及自定义端口 RDP 协商拒绝、TLS 后续失败和结果保留。
 
 ## 操作系统特征采集
 

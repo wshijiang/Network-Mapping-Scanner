@@ -25,7 +25,7 @@
 1. 在节点使用实际域名访问服务端，例如 `https://server.example.com:9999/login`，确认 DNS、路由、证书链和主机名校验通过。`scanner.c_server` 只填主机名/IP，不填 `https://`、端口或路径。
 2. 扫描端主动连接服务端 HTTPS API，无需直接访问 PG/ES，也无需为扫描端发布入站 API 端口。代理需保留 `/api/` 路径并允许 8 MiB 结果批次和 4 MiB 诊断分块；服务端通用请求上限默认 64 MiB。
 3. 确认到授权目标网段的接口、路由和地址族可用。host 网络不自动提供 IPv6 路由；公网出口探测成功也不保证目标网段可达。
-4. 原生端口扫描节点安装官方 masscan，填写绝对路径并使用 `standard_list`；服务识别需 zgrab2。Nuclei 默认关闭，启用前准备工具与经审核的签名模板，见 [Nuclei 指南](NUCLEI.md)。Docker 固定的工具提交可参考[第三方工具说明](../docker/THIRD_PARTY.md)。
+4. 原生端口扫描节点安装官方 masscan，填写绝对路径并使用 `standard_list`；服务识别需 zgrab2 固定提交 `835aa53808aed88b4c3e017d623b374fb26dca95`（v1.0.0 不含 RDP，不能替代）；构建及验证见 [RDP 使用说明](USAGE.md#rdp-识别与故障排查)。Nuclei 默认关闭，启用前准备工具与经审核的签名模板，见 [Nuclei 指南](NUCLEI.md)。Docker 固定的工具提交可参考[第三方工具说明](../docker/THIRD_PARTY.md)。
 
 私有 CA 在 Debian/Ubuntu 节点可由管理员安装：
 

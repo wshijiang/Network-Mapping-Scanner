@@ -85,7 +85,6 @@ async fn handshake(
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connect timeout"))??;
     match attempt.probe {
-        ProbeKind::Rdp => super::rdp::handshake(&mut stream).await.map(|r| (None, r)),
         ProbeKind::Modbus
         | ProbeKind::Enip
         | ProbeKind::S7
@@ -181,46 +180,6 @@ mod tests {
         )
         .await;
         (result, server)
-    }
-
-    #[tokio::test]
-    async fn explicit_rdp_works_without_zgrab_on_custom_port() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = [0; 19];
-            stream.read_exact(&mut request).await.unwrap();
-            assert_eq!(&request[15..], &[11, 0, 0, 0]);
-            stream
-                .write_all(&[3, 0, 0, 19, 14, 0xd0, 0, 0, 0, 0, 0, 2, 0, 8, 0, 2, 0, 0, 0])
-                .await
-                .unwrap();
-            let mut extra = [0];
-            assert_eq!(stream.read(&mut extra).await.unwrap(), 0);
-        });
-        let config = ServiceDetectionConfig {
-            required_services: vec!["rdp".into()],
-            zgrab_path: "/missing/zgrab2".into(),
-            ..Default::default()
-        };
-        let ports = [crate::scan::PortObservation {
-            ip: "127.0.0.1".into(),
-            port,
-            protocol: "tcp".into(),
-            state: "open".into(),
-            source: "fixture".into(),
-            observed_at: 1,
-        }];
-        let outcome = super::super::zgrab2::run(&config, &ports, "ipv4", &AtomicBool::new(false))
-            .await
-            .unwrap();
-        let super::super::zgrab2::EngineOutcome::Completed(results) = outcome else {
-            panic!("incomplete");
-        };
-        assert_eq!(results[0].service.as_deref(), Some("rdp"));
-        assert_eq!(results[0].source, "native");
-        server.await.unwrap();
     }
 
     #[tokio::test]
