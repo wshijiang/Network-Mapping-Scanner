@@ -7,6 +7,11 @@ impl ExclusiveFileLock {
         fs2::FileExt::try_lock_exclusive(&file)?;
         Ok(Self(file))
     }
+
+    #[cfg(test)]
+    pub(crate) fn try_clone_file(&self) -> io::Result<File> {
+        self.0.try_clone()
+    }
 }
 
 impl Drop for ExclusiveFileLock {
