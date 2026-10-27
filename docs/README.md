@@ -4,9 +4,9 @@
 
 扫描器负责注册、领取任务、执行扫描引擎并上传结果。首次部署需先准备可访问的服务端，再按下列路径配置和验收节点。
 
-## 本次待发布版本
+## 本次版本
 
-扫描器 **0.1.21**；配套服务端 **0.1.30**、扫描器 **0.1.21**、控制台 **0.1.24**。变更见[更新日志](CHANGELOG.md)，迁移、IPC 3 与发布次序见[配套发布指南](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)。release PR 待审，不表示制品已发布。
+扫描器 **0.1.21**；配套服务端 **0.1.30**、扫描器 **0.1.21**、控制台 **0.1.24**。变更见[更新日志](CHANGELOG.md)，迁移、IPC 3 与发布次序见[配套发布指南](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)。2026-10-27 修复后重新发布；2026-10-26 同版本制品已撤回，请核对当前 tag 提交与校验和。
 
 ## 版本更新
 
