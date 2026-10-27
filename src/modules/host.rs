@@ -21,34 +21,47 @@ pub(crate) struct StageResult {
     pub(crate) error: Option<String>,
 }
 
-struct Process(Child, std::path::PathBuf);
+struct Workspace(std::path::PathBuf);
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+struct Process {
+    child: Child,
+    _workspace: Workspace,
+}
 impl Drop for Process {
     fn drop(&mut self) {
         #[cfg(unix)]
-        if let Some(pid) = self.0.id() {
+        if let Some(pid) = self.child.id() {
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
-        let _ = self.0.start_kill();
-        let _ = std::fs::remove_dir_all(&self.1);
+        let _ = self.child.start_kill();
     }
 }
 
-fn spawn(path: &Path, stage: ScanStageKind, preflight: bool) -> Result<Process, ScannerError> {
+async fn spawn(
+    path: &Path,
+    stage: ScanStageKind,
+    preflight: bool,
+) -> Result<Process, ScannerError> {
     let mut command = ProcessCommand::new(path);
     let workspace = std::env::temp_dir().join(format!("scanner-worker-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&workspace)?;
+    let workspace = Workspace(workspace);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::set_permissions(&workspace.0, std::fs::Permissions::from_mode(0o700))?;
     }
     command
         .env_clear()
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .env("HOME", &workspace)
-        .env("TMPDIR", &workspace);
+        .env("HOME", &workspace.0)
+        .env("TMPDIR", &workspace.0);
     command.arg("--stage").arg(stage.name());
     if preflight {
         command.arg("--preflight");
@@ -60,11 +73,26 @@ fn spawn(path: &Path, stage: ScanStageKind, preflight: bool) -> Result<Process, 
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
-    match command.spawn() {
-        Ok(child) => Ok(Process(child, workspace)),
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(workspace);
-            Err(error.into())
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        match command.spawn() {
+            Ok(child) => {
+                return Ok(Process {
+                    child,
+                    _workspace: workspace,
+                });
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && Instant::now() < deadline =>
+            {
+                // A concurrent fork may briefly inherit a writable descriptor until exec.
+                // Retry only ETXTBSY; permanent errors remain immediately visible.
+                sleep(Duration::from_millis(5)).await;
+            }
+            Err(error) => {
+                return Err(error.into());
+            }
         }
     }
 }
@@ -80,11 +108,11 @@ fn check_hello(event: Event, stage: ScanStageKind) -> Result<(), ScannerError> {
 }
 
 pub(crate) async fn preflight(path: &Path, stage: ScanStageKind) -> Result<(), ScannerError> {
-    let mut child = spawn(path, stage, true)?;
-    let mut output = child.0.stdout.take().unwrap();
+    let mut child = spawn(path, stage, true).await?;
+    let mut output = child.child.stdout.take().unwrap();
     timeout(Duration::from_secs(30), async {
         check_hello(read_frame(&mut output).await?, stage)?;
-        if !child.0.wait().await?.success() {
+        if !child.child.wait().await?.success() {
             return Err(ScannerError::Scan("worker preflight failed".into()));
         }
         Ok(())
@@ -102,15 +130,15 @@ pub(crate) async fn execute(
     hard_timeout: Duration,
     cancel_grace: Duration,
 ) -> Result<StageResult, ScannerError> {
-    let mut child = spawn(&spec.worker_path, request.stage, false)?;
-    let mut stdout = child.0.stdout.take().unwrap();
+    let mut child = spawn(&spec.worker_path, request.stage, false).await?;
+    let mut stdout = child.child.stdout.take().unwrap();
     check_hello(
         timeout(Duration::from_secs(30), read_frame(&mut stdout))
             .await
             .map_err(|_| ScannerError::Scan("worker handshake timeout".into()))??,
         request.stage,
     )?;
-    let mut stdin = child.0.stdin.take().unwrap();
+    let mut stdin = child.child.stdin.take().unwrap();
     let id = request.id;
     let expected_stage = request.stage;
     let endpoint_count = input
@@ -238,13 +266,13 @@ pub(crate) async fn execute(
     // Reap the direct child after killing its entire process group; even a
     // successful worker must not leave scanner descendants running.
     #[cfg(unix)]
-    if let Some(pid) = child.0.id() {
+    if let Some(pid) = child.child.id() {
         unsafe {
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
     }
-    let _ = child.0.kill().await;
-    let _ = child.0.wait().await;
+    let _ = child.child.kill().await;
+    let _ = child.child.wait().await;
     result
 }
 
@@ -312,6 +340,49 @@ mod tests {
             },
         })
     }
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn worker_start_retries_transient_text_file_busy() {
+        let (root, spec) = fixture(hello());
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&spec.worker_path)
+            .unwrap();
+        let release = async {
+            sleep(Duration::from_millis(30)).await;
+            drop(writer);
+        };
+        let (result, _) = tokio::join!(
+            preflight(&spec.worker_path, ScanStageKind::PortDiscovery),
+            release
+        );
+        result.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn permanent_busy_worker_is_bounded_and_missing_worker_is_not_retried() {
+        let (root, spec) = fixture(hello());
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&spec.worker_path)
+            .unwrap();
+        let started = Instant::now();
+        let result = preflight(&spec.worker_path, ScanStageKind::PortDiscovery).await;
+        assert!(
+            matches!(result, Err(ScannerError::Io(e)) if e.kind() == std::io::ErrorKind::ExecutableFileBusy)
+        );
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop(writer);
+        std::fs::remove_dir_all(root).unwrap();
+        let result = preflight(&spec.worker_path, ScanStageKind::PortDiscovery).await;
+        assert!(
+            matches!(result, Err(ScannerError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound)
+        );
+    }
+
     #[tokio::test]
     async fn host_does_not_lose_partial_frame_on_timer_tick() {
         let request = request();
