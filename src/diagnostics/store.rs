@@ -1,8 +1,9 @@
 use super::{Result, protocol::*};
+use crate::file_lock::ExclusiveFileLock;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::{
-    fs::{File, OpenOptions},
+    fs::OpenOptions,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -10,7 +11,7 @@ use uuid::Uuid;
 
 struct Inner {
     db: Connection,
-    _lock: File,
+    _lock: ExclusiveFileLock,
 }
 #[derive(Clone)]
 pub struct Store {
@@ -28,7 +29,7 @@ impl Store {
             options.mode(0o600);
         }
         let lock = options.open(path.with_extension("lock"))?;
-        fs2::FileExt::try_lock_exclusive(&lock)?;
+        let lock = ExclusiveFileLock::acquire(lock)?;
         let db = Connection::open(&path)?;
         #[cfg(unix)]
         {

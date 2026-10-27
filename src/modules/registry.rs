@@ -4,6 +4,7 @@ use super::{
 };
 use crate::{
     error::ScannerError,
+    file_lock::ExclusiveFileLock,
     runtime_config::RuntimeSnapshot,
     scan::plan::ScanStageKind,
     types::{AppConfig, AssignedTask},
@@ -47,7 +48,7 @@ pub(crate) struct Registry {
 }
 struct Store {
     db: Connection,
-    _lock: File,
+    _lock: ExclusiveFileLock,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -123,7 +124,7 @@ impl Registry {
             .read(true)
             .write(true)
             .open(&lock_path)?;
-        fs2::FileExt::try_lock_exclusive(&lock).map_err(|_| {
+        let lock = ExclusiveFileLock::acquire(lock).map_err(|_| {
             ScannerError::Config("module store is in use by the running agent".into())
         })?;
         let db = Connection::open(&config.state_database)?;

@@ -1,7 +1,8 @@
 use crate::error::ScannerError;
+use crate::file_lock::ExclusiveFileLock;
 use crate::scan::ScanObservation;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
@@ -32,7 +33,7 @@ pub(crate) struct StoredRuntimeConfiguration {
 
 pub(crate) struct StateStore {
     connection: Connection,
-    _lock: File,
+    _lock: ExclusiveFileLock,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,7 +57,7 @@ impl StateStore {
             .write(true)
             .open(&lock_path)
             .map_err(ScannerError::Io)?;
-        fs2::FileExt::try_lock_exclusive(&lock).map_err(|error| {
+        let lock = ExclusiveFileLock::acquire(lock).map_err(|error| {
             ScannerError::Config(format!(
                 "scanner state is already in use ({}): {error}",
                 lock_path.display()

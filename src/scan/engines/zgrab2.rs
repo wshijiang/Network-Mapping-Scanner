@@ -371,14 +371,15 @@ async fn run_zgrab_attempts(
     if address_family == "ipv6" {
         command.arg("--resolve-ipv6");
     }
-    let mut child = command
+    command
         .arg("multiple")
         .args(["--config-file", config_file.path_string()?])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
+        .kill_on_drop(true);
+    let mut child = crate::process::spawn(&mut command)
+        .await
         .map_err(|error| ScannerError::Scan(format!("failed to spawn zgrab2: {error}")))?;
     let process_id = child.id();
 

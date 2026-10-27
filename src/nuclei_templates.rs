@@ -165,7 +165,10 @@ pub(crate) async fn prepare(config: &NucleiConfig) -> Result<(), ScannerError> {
                 .stderr(Stdio::null());
             let status = timeout(
                 Duration::from_secs(config.template_update_timeout_seconds),
-                command.status(),
+                async {
+                    let mut child = crate::process::spawn(&mut command).await?;
+                    child.wait().await
+                },
             )
             .await
             .map_err(|_| {

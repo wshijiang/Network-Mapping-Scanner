@@ -131,9 +131,14 @@ pub(crate) async fn run(
         "spawning masscan process"
     );
     let started_at = Instant::now();
-    let mut child = scanner_command(path, config, target)
-        .spawn()
-        .map_err(|e| ScannerError::Scan(format!("failed to spawn scanner: {e}")))?;
+    let mut command = scanner_command(path, config, target);
+    let mut child = tokio::select! {
+        biased;
+        _ = wait_for_cancellation(cancel_requested) => return Ok(EngineOutcome::Cancelled),
+        child = crate::process::spawn(&mut command) => {
+            child.map_err(|e| ScannerError::Scan(format!("failed to spawn scanner: {e}")))?
+        },
+    };
     let process_id = child.id();
     let stdout = child
         .stdout
@@ -168,7 +173,7 @@ pub(crate) async fn run(
         tokio::select! {
             biased;
             _ = wait_for_cancellation(cancel_requested) => ProcessOutcome::Cancelled,
-            _ = sleep(Duration::from_secs(config.max_runtime_seconds)) => {
+            _ = sleep(Duration::from_secs(config.max_runtime_seconds).saturating_sub(started_at.elapsed())) => {
                 ProcessOutcome::Failed(ProcessFailure {
                     stage: "runtime_limit",
                     code: "masscan_runtime_limit_exceeded",
@@ -929,6 +934,61 @@ while [ "$i" -lt 3000 ]; do printf 'open tcp 443 192.0.2.1 1\n'; i=$((i + 1)); d
                 matches!(scanner.run(&standard_config(), &AtomicBool::new(false)).await.unwrap(), EngineOutcome::Completed(results) if results.is_empty())
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn busy_executable_is_retried_until_the_writer_closes() {
+        let scanner = TestScanner::new("printf 'open tcp 80 192.0.2.1 1\\n'");
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&scanner.path)
+            .unwrap();
+        let config = standard_config();
+        let cancel = AtomicBool::new(false);
+        let (outcome, ()) = tokio::join!(scanner.run(&config, &cancel), async {
+            sleep(Duration::from_millis(50)).await;
+            drop(writer);
+        });
+        assert!(
+            matches!(outcome.unwrap(), EngineOutcome::Completed(results) if results.len() == 1)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn persistently_busy_executable_returns_a_bounded_spawn_error() {
+        let scanner = TestScanner::new("exit 0");
+        let _writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&scanner.path)
+            .unwrap();
+        let outcome = timeout(
+            Duration::from_secs(2),
+            scanner.run(&standard_config(), &AtomicBool::new(false)),
+        )
+        .await
+        .expect("busy executable retries must be bounded");
+        assert!(
+            matches!(outcome, Err(ScannerError::Scan(error)) if error.contains("Text file busy"))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cancellation_interrupts_busy_executable_retries() {
+        let scanner = TestScanner::new("exit 0");
+        let _writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&scanner.path)
+            .unwrap();
+        let config = standard_config();
+        let cancel = AtomicBool::new(false);
+        let (outcome, ()) = tokio::join!(scanner.run(&config, &cancel), async {
+            sleep(Duration::from_millis(50)).await;
+            cancel.store(true, Ordering::Relaxed);
+        });
+        assert!(matches!(outcome.unwrap(), EngineOutcome::Cancelled));
     }
 
     #[cfg(unix)]

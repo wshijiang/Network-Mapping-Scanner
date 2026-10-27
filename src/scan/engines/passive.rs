@@ -257,7 +257,7 @@ pub(crate) async fn run(
     config: &ServiceDetectionConfig,
     ports: &[PortObservation],
     cancel: &AtomicBool,
-    mut journal: Option<&mut crate::journal::ScanJournal<'_>>,
+    journal: Option<&mut crate::journal::ScanJournal<'_>>,
 ) -> Result<EngineOutcome, ScannerError> {
     let o = &config.probe_options;
     validate_options(o)?;
@@ -292,6 +292,17 @@ pub(crate) async fn run(
     if let Some(group) = &o.passive_group {
         socket.join_multicast_v4(group.parse().map_err(|_| invalid())?, bind)?;
     }
+    receive(config, ports, cancel, journal, socket).await
+}
+
+async fn receive(
+    config: &ServiceDetectionConfig,
+    ports: &[PortObservation],
+    cancel: &AtomicBool,
+    mut journal: Option<&mut crate::journal::ScanJournal<'_>>,
+    socket: UdpSocket,
+) -> Result<EngineOutcome, ScannerError> {
+    let o = &config.probe_options;
     let allowed: std::collections::HashSet<_> = ports.iter().map(|p| p.ip.as_str()).collect();
     let prior = journal.as_ref().map_or(0, |j| j.state.elapsed_ms);
     let budget = (o.passive_window_seconds.unwrap_or(10) as u64 * 1000)
@@ -503,9 +514,6 @@ mod tests {
     }
     #[tokio::test]
     async fn checkpoint_preserves_multiple_sources_across_restarts() {
-        let reservation = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let port = reservation.local_addr().unwrap().port();
-        drop(reservation);
         let senders = [
             UdpSocket::bind("127.0.0.1:0").await.unwrap(),
             UdpSocket::bind("127.0.0.1:0").await.unwrap(),
@@ -520,14 +528,6 @@ mod tests {
             },
             ..Default::default()
         };
-        let ports = [PortObservation {
-            ip: "127.0.0.1".into(),
-            port,
-            protocol: "udp".into(),
-            state: "unknown".into(),
-            source: "udp_target".into(),
-            observed_at: 0,
-        }];
         let path =
             std::env::temp_dir().join(format!("passive-recovery-{}.sqlite3", uuid::Uuid::new_v4()));
         let key = format!("{}|configuration", uuid::Uuid::new_v4());
@@ -535,11 +535,23 @@ mod tests {
             2, 0, 2, 0x80, 8, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0xb1, 0, 2, 0, 0, 0,
         ];
         for (iteration, indices) in [vec![0, 1], vec![0, 2]].iter().enumerate() {
+            // Keep ownership of the OS-assigned port instead of dropping a
+            // reservation and racing other tests (or inherited descriptors).
+            let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let port = socket.local_addr().unwrap().port();
+            let ports = [PortObservation {
+                ip: "127.0.0.1".into(),
+                port,
+                protocol: "udp".into(),
+                state: "unknown".into(),
+                source: "udp_target".into(),
+                observed_at: 0,
+            }];
             let store = crate::storage::StateStore::open(path.clone()).unwrap();
             let mut journal =
                 crate::journal::ScanJournal::open(&store, "origin", key.clone()).unwrap();
             let cancel = AtomicBool::new(false);
-            let receive = run(&config, &ports, &cancel, Some(&mut journal));
+            let receive = receive(&config, &ports, &cancel, Some(&mut journal), socket);
             let send = async {
                 sleep(Duration::from_millis(30)).await;
                 for &index in indices {

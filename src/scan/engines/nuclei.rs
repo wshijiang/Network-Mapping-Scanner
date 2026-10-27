@@ -239,7 +239,7 @@ async fn run_batch(
         concurrency = config.concurrency,
         "starting nuclei vulnerability scan"
     );
-    let mut child = match command.spawn() {
+    let mut child = match crate::process::spawn(&mut command).await {
         Ok(child) => child,
         Err(error) => {
             let _ = tokio::fs::remove_file(&target_path).await;
