@@ -48,7 +48,10 @@ pub(crate) async fn probe(
         module: attempt.probe.name().into(),
         status: status.into(),
         banner,
-        detail: json!({"result":result,"truncated":false}),
+        detail: super::zgrab2::bounded_detail(
+            &json!({"result":result,"truncated":false}),
+            config.max_result_bytes,
+        ),
     }
 }
 

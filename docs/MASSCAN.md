@@ -42,6 +42,13 @@ masscan <targets> -p <ports> --rate <rate>
 兼容模式仅传入目标、端口、速率及 `--output-format list --output-filename -`。
 两种模式都不启用 banner 探测，不会因解析失败换格式重新发起扫描。
 
+## 启动竞争处理
+
+Linux 并行创建子进程时，暂时继承的写描述符可能引起 `Text file busy`（`ETXTBSY`）。
+扫描器仅对此启动错误进行最多约 250 毫秒的异步重试；进程成功启动后不重跑扫描。
+文件不存在、权限错误及持续占用仍返回错误；重试不会把损坏输出、非零退出或超时转成成功。
+该启动策略与 Worker、zgrab2、Nuclei 共用。
+
 ## 输出契约
 
 官方 list 示例：

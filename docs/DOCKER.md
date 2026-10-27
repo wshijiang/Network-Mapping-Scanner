@@ -5,7 +5,7 @@
 [项目首页](../README.md) · [部署总览与原生安装](DEPLOYMENT.md) · [文档中心](README.md) · [masscan](MASSCAN.md) · [恢复](recovery.md)
 
 镜像 `ghcr.io/wshijiang/network-mapping-scanner` 支持 Linux AMD64/ARM64，包含 scanner-rs、
-官方 masscan 1.3.2、zgrab2 v1.0.0 和 Nuclei v3.11.1。全部工具固定提交，Nuclei 默认关闭，
+官方 masscan 1.3.2、zgrab2 master 快照 `835aa538`（2026-10-22 UTC，含 RDP） 和 Nuclei v3.11.1。全部工具固定提交，Nuclei 默认关闭，
 镜像内置官方最新稳定版模板，CI 在 prepare 中解析一次不可变提交供两种架构共用。许可证及对应源码见 [第三方工具说明](../docker/THIRD_PARTY.md)。
 Rust 1.98.0、Go 1.26.8 与运行环境均基于 Debian 12，基础镜像固定多架构 digest。
 

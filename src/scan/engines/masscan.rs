@@ -1002,15 +1002,19 @@ while [ "$i" -lt 3000 ]; do printf 'open tcp 443 192.0.2.1 1\n'; i=$((i + 1)); d
             "i=0; while [ \"$i\" -lt 5000 ]; do printf x; i=$((i + 1)); done",
         ] {
             let scanner = TestScanner::new(script);
+            let outcome = scanner
+                .run(&standard_config(), &AtomicBool::new(false))
+                .await;
             let Err(ScannerError::ExternalProcess {
                 code,
                 invalid_line_count,
                 ..
-            }) = scanner
-                .run(&standard_config(), &AtomicBool::new(false))
-                .await
+            }) = outcome
             else {
-                panic!("invalid output must fail")
+                match outcome {
+                    Err(error) => panic!("expected output error, got {error}; script={script:?}"),
+                    Ok(_) => panic!("invalid output unexpectedly succeeded; script={script:?}"),
+                }
             };
             assert!(matches!(
                 code,

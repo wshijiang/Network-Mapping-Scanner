@@ -47,6 +47,7 @@ pub(crate) struct Registry {
     scope: String,
 }
 struct Store {
+    // Fields drop in declaration order: close SQLite before releasing ownership.
     db: Connection,
     _lock: ExclusiveFileLock,
 }
@@ -127,6 +128,7 @@ impl Registry {
         let lock = ExclusiveFileLock::acquire(lock).map_err(|_| {
             ScannerError::Config("module store is in use by the running agent".into())
         })?;
+        let lock = StoreLock(lock);
         let db = Connection::open(&config.state_database)?;
         db.pragma_update(None, "synchronous", "FULL")?;
         db.busy_timeout(Duration::from_secs(5))?;
@@ -874,6 +876,24 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn final_owner_releases_lock_even_with_a_duplicated_descriptor() {
+        let f = Fixture::new();
+        let registry = Registry::open_store(f.local.modules.clone(), "origin".into()).unwrap();
+        // dup and fork share the same open-file description on Unix.
+        let inherited = registry.state.lock().unwrap()._lock.0.try_clone().unwrap();
+        let owner = registry.clone();
+        drop(registry);
+        assert!(Registry::open_store(f.local.modules.clone(), "origin".into()).is_err());
+        drop(owner);
+        let reopened = Registry::open_store(f.local.modules.clone(), "origin".into()).unwrap();
+        // Closing an old inherited descriptor must not release the new owner's lock.
+        drop(inherited);
+        assert!(Registry::open_store(f.local.modules.clone(), "origin".into()).is_err());
+        drop(reopened);
     }
 
     #[tokio::test]

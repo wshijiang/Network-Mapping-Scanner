@@ -350,7 +350,7 @@ async fn run_zgrab_attempts(
 ) -> Result<ProcessOutcome, ScannerError> {
     let input = build_zgrab_input(attempts);
 
-    let config_file = TempZgrabConfig::create(config).await?;
+    let config_file = TempZgrabConfig::create(config, attempts).await?;
     let started_at = Instant::now();
     tracing::debug!(
         zgrab_path = %config.zgrab_path,
@@ -678,7 +678,7 @@ fn sanitize_json_value(value: Value) -> Value {
     }
 }
 
-fn bounded_detail(module_data: &Value, max_result_bytes: usize) -> Value {
+pub(super) fn bounded_detail(module_data: &Value, max_result_bytes: usize) -> Value {
     let mut module_data = sanitize_json_value(module_data.clone());
     let serialized_bytes = serde_json::to_vec(&module_data)
         .map(|value| value.len())
@@ -739,6 +739,15 @@ fn bounded_detail(module_data: &Value, max_result_bytes: usize) -> Value {
         "/smb/native_os",
         "/session_setup/native_os",
         "/server_os",
+        "/selected_protocol",
+        "/failure_code",
+        "/ntlm/os_version",
+        "/ntlm/target_name",
+        "/ntlm/netbios_computer_name",
+        "/ntlm/netbios_domain_name",
+        "/ntlm/dns_computer_name",
+        "/ntlm/dns_domain_name",
+        "/ntlm/forest_name",
     ] {
         if let Some(text) = module_data
             .pointer(&format!("/result{path}"))
@@ -751,6 +760,14 @@ fn bounded_detail(module_data: &Value, max_result_bytes: usize) -> Value {
                 max_result_bytes,
             );
         }
+    }
+    if let Some(flags) = module_data.pointer("/result/negotiation_flags") {
+        retain_compact_field(
+            &mut summary,
+            "/negotiation_flags",
+            flags.clone(),
+            max_result_bytes,
+        );
     }
     if let Some(headers) = module_data
         .pointer("/result/response/headers")
@@ -801,13 +818,20 @@ struct TempZgrabConfig {
 }
 
 impl TempZgrabConfig {
-    async fn create(config: &ServiceDetectionConfig) -> Result<Self, ScannerError> {
+    async fn create(
+        config: &ServiceDetectionConfig,
+        attempts: &[ProbeAttempt],
+    ) -> Result<Self, ScannerError> {
         let path = std::env::temp_dir().join(format!(
             "network-mapping-zgrab2-{}-{}.ini",
             std::process::id(),
             Uuid::now_v7()
         ));
-        tokio::fs::write(&path, zgrab_config(config)).await?;
+        tokio::fs::write(
+            &path,
+            zgrab_config(config, attempts.iter().map(|a| a.probe)),
+        )
+        .await?;
         Ok(Self { path })
     }
 
@@ -836,13 +860,20 @@ impl Drop for TempZgrabConfig {
     }
 }
 
-fn zgrab_config(config: &ServiceDetectionConfig) -> String {
+fn zgrab_config(
+    config: &ServiceDetectionConfig,
+    probes: impl IntoIterator<Item = ProbeKind>,
+) -> String {
     let timeout = format!(
         "connect-timeout=\"{}s\"\ntarget-timeout=\"{}s\"\n",
         config.connect_timeout_seconds, config.target_timeout_seconds
     );
     let mut output = String::from("[Application Options]\n\n");
-    for probe in ProbeKind::ALL.into_iter().filter(|p| !p.is_native()) {
+    let mut seen = std::collections::HashSet::new();
+    for probe in probes
+        .into_iter()
+        .filter(|p| !p.is_native() && seen.insert(*p))
+    {
         output.push_str(&format!(
             "[{}]\nname=\"{}\"\ntrigger=\"{}\"\nport={}\n{timeout}{}\n",
             probe.section(),
@@ -1180,9 +1211,171 @@ mod tests {
         assert!(serde_json::to_vec(&bounded).unwrap().len() <= 1024);
     }
 
+    #[tokio::test]
+    #[ignore = "requires ZGRAB2_TEST_BINARY built at the pinned revision"]
+    async fn real_zgrab_accepts_all_generated_modules() {
+        let binary = std::env::var("ZGRAB2_TEST_BINARY").expect("zgrab2 binary");
+        let attempts: Vec<_> = ProbeKind::ALL
+            .into_iter()
+            .map(|probe| ProbeAttempt {
+                ip: "127.0.0.1".into(),
+                port: probe.default_port(),
+                probe,
+            })
+            .collect();
+        let config = TempZgrabConfig::create(&ServiceDetectionConfig::default(), &attempts)
+            .await
+            .unwrap();
+        let output = Command::new(binary)
+            .args([
+                "--blocklist-file",
+                "/dev/null",
+                "--input-file",
+                "/dev/null",
+                "--senders",
+                "1",
+                "multiple",
+                "--config-file",
+                config.path_string().unwrap(),
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires ZGRAB2_TEST_BINARY built at the pinned revision"]
+    async fn real_zgrab_rdp_rejection_and_partial_tls_are_identified() {
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::net::TcpListener;
+        std::env::var("ZGRAB2_TEST_BINARY").expect("zgrab2 binary");
+        let wrapper = std::env::temp_dir().join(format!("zgrab-rdp-test-{}", Uuid::now_v7()));
+        std::fs::write(
+            &wrapper,
+            "#!/bin/sh\nexec \"$ZGRAB2_TEST_BINARY\" --blocklist-file /dev/null \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for partial_tls in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut header = [0; 4];
+                stream.read_exact(&mut header).await.unwrap();
+                assert_eq!(&header[..2], &[3, 0]);
+                let n = u16::from_be_bytes([header[2], header[3]]) as usize;
+                assert!((19..=1024).contains(&n));
+                let mut body = vec![0; n - 4];
+                stream.read_exact(&mut body).await.unwrap();
+                let mut response = [3, 0, 0, 19, 14, 0xd0, 0, 0, 0, 0, 0, 3, 0, 8, 0, 5, 0, 0, 0];
+                if partial_tls {
+                    response[11] = 2;
+                    response[15] = 1;
+                }
+                for byte in response {
+                    stream.write_all(&[byte]).await.unwrap();
+                }
+                if partial_tls {
+                    let mut tls = [0; 5];
+                    stream.read_exact(&mut tls).await.unwrap();
+                    assert_eq!(tls[0], 22); // TLS handshake, then fixture closes.
+                }
+            });
+            let config = ServiceDetectionConfig {
+                required_services: vec!["rdp".into()],
+                zgrab_path: wrapper.to_string_lossy().into_owned(),
+                target_timeout_seconds: 3,
+                connect_timeout_seconds: 1,
+                ..Default::default()
+            };
+            let outcome = run(
+                &config,
+                &[open_port("127.0.0.1", port, "tcp")],
+                "ipv4",
+                &AtomicBool::new(false),
+            )
+            .await
+            .unwrap();
+            server.await.unwrap();
+            let EngineOutcome::Completed(results) = outcome else {
+                panic!("incomplete");
+            };
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].service.as_deref(), Some("rdp"), "{results:?}");
+            assert_eq!(results[0].source, "zgrab2");
+            let evidence = &results[0].data.as_ref().unwrap()["evidence"][0];
+            if partial_tls {
+                assert_ne!(evidence["status"], "success");
+                assert_eq!(evidence["result"]["selected_protocol"], "ssl");
+            } else {
+                assert_eq!(
+                    evidence["result"]["failure_code"],
+                    "hybrid_required_by_server"
+                );
+            }
+        }
+        std::fs::remove_file(wrapper).unwrap();
+    }
+
+    #[test]
+    fn oversized_rdp_retains_negotiation_and_ntlm_fields() {
+        let data = json!({"status":"handshake-error","result":{"selected_protocol":"hybrid",
+            "negotiation_flags":{"extended_client_data_supported":true},
+            "ntlm":{"os_version":"10.0.19045","dns_computer_name":"host.example"},
+            "tls":{"certificate":"x".repeat(8192)}}});
+        let bounded = bounded_detail(&data, 1024);
+        assert_eq!(bounded["truncated"], true);
+        assert_eq!(bounded["result"]["selected_protocol"], "hybrid");
+        assert_eq!(bounded["result"]["ntlm"]["os_version"], "10.0.19045");
+        assert_eq!(
+            bounded["result"]["negotiation_flags"]["extended_client_data_supported"],
+            true
+        );
+        assert!(serde_json::to_vec(&bounded).unwrap().len() <= 1024);
+    }
+
+    #[test]
+    fn config_contains_only_requested_external_modules_once() {
+        let config = zgrab_config(
+            &ServiceDetectionConfig::default(),
+            [
+                ProbeKind::Http,
+                ProbeKind::Http,
+                ProbeKind::Rdp,
+                ProbeKind::Dns,
+            ],
+        );
+        assert_eq!(config.matches("[http]").count(), 1);
+        for section in ["[dns]", "[ssh]", "[ftp]"] {
+            assert!(!config.contains(section));
+        }
+        let all = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL);
+        assert!(all.contains("[rdp]"));
+    }
+
+    #[test]
+    fn native_identity_is_safe_for_jsonb_and_obeys_result_budget() {
+        let identity = json!({"result":{"identity":{"vendor":"PLC\u{0000} vendor"},
+            "product_name":"device\u{0000}name"},"truncated":false});
+        let clean = bounded_detail(&identity, 1024);
+        assert_eq!(clean["result"]["product_name"], "devicename");
+        assert_eq!(clean["result"]["identity"]["vendor"], "PLC vendor");
+        let large = json!({"result":{"identity": "x".repeat(4096)},"truncated":false});
+        let bounded = bounded_detail(&large, 1024);
+        assert_eq!(bounded["truncated"], true);
+        assert!(serde_json::to_vec(&bounded).unwrap().len() <= 1024);
+    }
+
     #[test]
     fn generated_config_routes_http_and_https_separately() {
-        let config = zgrab_config(&ServiceDetectionConfig::default());
+        let config = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL);
         assert!(config.contains("name=\"http\""));
         assert!(config.contains("name=\"https\""));
         assert!(config.contains("use-https=true"));
@@ -1191,7 +1384,7 @@ mod tests {
 
     #[test]
     fn generated_config_enables_implicit_tls_application_modules() {
-        let config = zgrab_config(&ServiceDetectionConfig::default());
+        let config = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL);
         assert!(config.contains("[smtp]\nname=\"smtps\""));
         assert!(config.contains("smtps=true"));
         assert!(config.contains("[ftp]\nname=\"ftps\""));

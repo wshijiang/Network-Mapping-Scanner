@@ -52,7 +52,7 @@ RUN git init masscan && git -C masscan remote add origin https://github.com/robe
     && mkdir -p /out/licenses/masscan && cp masscan/bin/masscan /out/masscan && cp masscan/LICENSE /out/licenses/masscan/ \
     && rm -rf /tools/masscan
 RUN git init zgrab2 && git -C zgrab2 remote add origin https://github.com/zmap/zgrab2.git \
-    && git -C zgrab2 fetch --depth=1 origin ea734bcf60ef2921684cb522dfb87a07a322afa6 \
+    && git -C zgrab2 fetch --depth=1 origin 835aa53808aed88b4c3e017d623b374fb26dca95 \
     && git -C zgrab2 checkout --detach FETCH_HEAD \
     && cd zgrab2 && go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/zgrab2 ./cmd/zgrab2 \
     && mkdir -p /out/licenses/zgrab2 && cp LICENSE* /out/licenses/zgrab2/ \
@@ -107,7 +107,7 @@ LABEL org.opencontainers.image.title="network-mapping-scanner" \
       org.opencontainers.image.revision=$REVISION \
       io.network-mapping.nuclei-templates.version=$NUCLEI_TEMPLATES_VERSION \
       io.network-mapping.nuclei-templates.revision=$NUCLEI_TEMPLATES_REVISION
-RUN printf 'scanner-version=%s\nscanner-commit=%s\narchitecture=%s\nrust=1.98.0\ngo=1.26.8\nmasscan-commit=06902c40d1494881c17b7968ef530e1d6bbd320c\nzgrab2-commit=ea734bcf60ef2921684cb522dfb87a07a322afa6\nnuclei-commit=a8c88feb4a1c8e961b7902534ce3af97e9d524a4\n' "$VERSION" "$REVISION" "$TARGETARCH" > BUILD-INFO
+RUN printf 'scanner-version=%s\nscanner-commit=%s\narchitecture=%s\nrust=1.99.0\ngo=1.27.2\nmasscan-commit=06902c40d1494881c17b7968ef530e1d6bbd320c\nzgrab2-commit=835aa53808aed88b4c3e017d623b374fb26dca95\nnuclei-commit=a8c88feb4a1c8e961b7902534ce3af97e9d524a4\n' "$VERSION" "$REVISION" "$TARGETARCH" > BUILD-INFO
 RUN printf 'nuclei-templates-version=%s\nnuclei-templates-commit=%s\n' "$NUCLEI_TEMPLATES_VERSION" "$NUCLEI_TEMPLATES_REVISION" >> BUILD-INFO
 # Existing shutdown handling listens for SIGINT; use the same signal in Compose.
 STOPSIGNAL SIGINT

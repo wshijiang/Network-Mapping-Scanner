@@ -62,9 +62,55 @@ UDP 使用 plan v2 的 `udp_inventory`（DNS、EtherNet/IP UDP/44818、经典 BA
 
 完整支持矩阵、任务示例、参数边界和配套服务端投影迁移见[服务协议识别与部署](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。Worker 必须配套 [IPC 3 模块包](MODULE_UPDATES.md)。
 
+## RDP 识别与故障排查
+
+服务识别使用固定的 zgrab2 最新主分支快照 `835aa53808aed88b4c3e017d623b374fb26dca95`（2026-10-22 UTC）。
+截至 2026-10-27，官方最新 Release 仍为 v1.0.0；该旧版不包含 RDP，不能作为本版本的替代依赖。
+镜像已固定完整 SHA；独立安装和模块包也应使用同一提交，并配套升级 Agent、Worker 和引擎。
+
+RDP 交给 zgrab2 的 `rdp` 模块，默认端口 TCP/3389；显式选择 `rdp` 可探测自定义端口。
+模块进行 X.224/RDP 协商，按服务端选择继续 TLS 证书采集及 CredSSP/NTLM Challenge 指纹采集，
+不提交用户登录凭据、不建立桌面会话。证据 `source=zgrab2`，`selected_protocol`、`failure_code`
+为上游字符串枚举，`negotiation_flags` 为对象，可选的 `tls`、`ntlm` 保留上游结构。
+证书采集不代表证书可信；NTLM 系统版本字段不保证已被服务端投影为操作系统标签。
+
+协商拒绝仍能确认 RDP；已协商 `ssl`/`hybrid`/`hybrid_ex` 后 TLS 或 NTLM 失败时，
+节点仍保留 RDP 服务类型，同时在 `evidence[].status` 保留原始失败状态。
+无协商证据的失败不识别为 RDP。旧式 Standard RDP 的识别遵循上游模块行为。
+阶段期限、连接/目标超时、取消与限速继续生效；默认 adaptive 的 8 次预算不保证未知
+非标准端口会尝试 RDP，需要确定执行时显式选择该协议。
+
+出现 `could not find option group` 且涉及 `rdp`，先核对正在运行的 zgrab2 是否为上述提交。
+外部引擎配置只包含本批使用的模块；升级时需同时替换模块包中的引擎，不能只替换 Agent。
+
+原生 TCP 与主动 UDP 握手继续应用 `max_result_bytes`，清理 NUL 并标记截断。
+超大 RDP 握手尽量保留协商字段及 `ntlm` 名称/版本字段；TLS 大字段可能被裁剪。
+截断后仍可保留服务名，但详情可能缺失；需要完整证据时可提高允许的预算后重扫。
+
+### 独立安装与兼容性验证
+
+使用 Go 1.27.2（至少满足上游 go.mod 的 Go 1.26 要求）从固定提交构建：
+
+```sh
+git clone https://github.com/zmap/zgrab2.git
+cd zgrab2
+git checkout --detach 835aa53808aed88b4c3e017d623b374fb26dca95
+go build -mod=readonly -trimpath -o zgrab2 ./cmd/zgrab2
+./zgrab2 rdp --help
+```
+
+按照上游安装说明配置 blocklist，并将扫描器 `zgrab_path` 指向安装后的绝对路径。
+源码维护者可从扫描器仓库执行下面的真实引擎测试；仅测试本机回环夹具，测试内部使用空 blocklist：
+
+```sh
+ZGRAB2_TEST_BINARY=/absolute/path/to/zgrab2 cargo test --locked --lib real_zgrab -- --ignored
+```
+
+测试验证所有外部模块的实际 INI 解析，以及自定义端口 RDP 协商拒绝、TLS 后续失败和结果保留。
+
 ## 操作系统特征采集
 
-操作系统推断由服务端完成，节点继续使用已有 zgrab2 服务识别阶段，不增加扫描端口或探测
+操作系统推断由服务端完成，节点继续使用已有原生/zgrab2 服务识别阶段，不增加扫描端口或探测
 连接。选中的握手信息随 `ServiceObservation.data` 上传；普通 OpenSSH、nginx、SMB/RDP
 连接成功等信息不足时，服务端会保留未知。
 

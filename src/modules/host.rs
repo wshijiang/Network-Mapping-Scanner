@@ -324,6 +324,49 @@ mod tests {
             },
         })
     }
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn worker_start_retries_transient_text_file_busy() {
+        let (root, spec) = fixture(hello());
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&spec.worker_path)
+            .unwrap();
+        let release = async {
+            sleep(Duration::from_millis(30)).await;
+            drop(writer);
+        };
+        let (result, _) = tokio::join!(
+            preflight(&spec.worker_path, ScanStageKind::PortDiscovery),
+            release
+        );
+        result.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn permanent_busy_worker_is_bounded_and_missing_worker_is_not_retried() {
+        let (root, spec) = fixture(hello());
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&spec.worker_path)
+            .unwrap();
+        let started = Instant::now();
+        let result = preflight(&spec.worker_path, ScanStageKind::PortDiscovery).await;
+        assert!(
+            matches!(result, Err(ScannerError::Io(e)) if e.kind() == std::io::ErrorKind::ExecutableFileBusy)
+        );
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop(writer);
+        std::fs::remove_dir_all(root).unwrap();
+        let result = preflight(&spec.worker_path, ScanStageKind::PortDiscovery).await;
+        assert!(
+            matches!(result, Err(ScannerError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound)
+        );
+    }
+
     #[tokio::test]
     async fn host_does_not_lose_partial_frame_on_timer_tick() {
         let request = request();

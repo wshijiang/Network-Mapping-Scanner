@@ -5,7 +5,7 @@
 | 工具 | 版本 | 对应源码 |
 | --- | --- | --- |
 | masscan | 1.3.2 | https://github.com/robertdavidgraham/masscan/tree/06902c40d1494881c17b7968ef530e1d6bbd320c |
-| zgrab2 | v1.0.0 | https://github.com/zmap/zgrab2/tree/ea734bcf60ef2921684cb522dfb87a07a322afa6 |
+| zgrab2 | master snapshot 835aa538 (2026-10-22 UTC) | https://github.com/zmap/zgrab2/tree/835aa53808aed88b4c3e017d623b374fb26dca95 |
 | Nuclei | v3.11.1 | https://github.com/projectdiscovery/nuclei/tree/a8c88feb4a1c8e961b7902534ce3af97e9d524a4 |
 
 masscan 使用 AGPL。分发镜像时，分发方必须按其许可证提供对应源码及构建说明；
