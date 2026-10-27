@@ -79,25 +79,38 @@ impl Fixture {
             .read_line(&mut port)
             .unwrap();
         let port: u16 = port.trim().parse().expect("fixture did not start");
-        let config = include_str!("../config.toml")
-            .replace("c_server = \"example.com\"", "c_server = \"127.0.0.1\"")
-            .replace("c_port = 443", &format!("c_port = {port}"))
-            .replace("verify_tls = true", "verify_tls = false")
-            .replace("scanner_path = \"./a\"", "scanner_path = \"/bin/true\"")
-            .replace(
-                "scanner_id = \"\"",
-                "scanner_id = \"019c0000-0000-7000-8000-000000000001\"",
-            )
-            .replace("runtime_token = \"\"", "runtime_token = \"fixture-token\"")
-            .replace(
-                "reconnect_max_delay_seconds = 60",
-                "reconnect_max_delay_seconds = 1",
-            )
-            .replace(
-                "active_task_reconnect_max_delay_seconds = 10",
-                "active_task_reconnect_max_delay_seconds = 1",
-            )
-            .replace("enabled = true", "enabled = false");
+        // Keep this fixture independent of deployment examples: Docker builds
+        // replace config.toml with their own public defaults before testing.
+        let config = format!(
+            r#"[scanner]
+c_server = "127.0.0.1"
+c_port = {port}
+rate = 1000
+verify_tls = false
+scanner_path = "/bin/true"
+scanner_id = "019c0000-0000-7000-8000-000000000001"
+runtime_token = "fixture-token"
+reconnect_initial_delay_seconds = 1
+reconnect_max_delay_seconds = 1
+active_task_reconnect_max_delay_seconds = 1
+
+[network]
+ipv4_enabled = false
+ipv6_enabled = false
+
+[service_detection]
+enabled = false
+
+[dns]
+enabled = false
+
+[nuclei]
+enabled = false
+
+[upload]
+endpoint = "https://127.0.0.1:{port}/api/scanner/result"
+"#
+        );
         fs::write(root.join("config.toml"), config).unwrap();
         let log = fs::File::create(root.join("process.log")).unwrap();
         let scanner = Command::new(env!("CARGO_BIN_EXE_scanner-rs"))
