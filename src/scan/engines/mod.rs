@@ -12,3 +12,5 @@ pub(crate) mod industrial;
 pub(crate) mod udp;
 
 pub(crate) mod passive;
+
+pub(crate) mod rdp;

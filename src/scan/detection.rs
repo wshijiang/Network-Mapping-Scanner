@@ -205,6 +205,7 @@ impl ProbeKind {
         matches!(
             self,
             Self::Dns
+                | Self::Rdp
                 | Self::Vnc
                 | Self::Dot
                 | Self::Doh
@@ -420,16 +421,16 @@ pub(crate) fn aggregate(
                 service: selected.map(|candidate| candidate.service.clone()),
                 banner,
                 source: if selected_evidence
-                    .is_some_and(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
+                    .is_some_and(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts" | "rdp"))
                     || evidence
                         .iter()
-                        .all(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
+                        .all(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts" | "rdp"))
                 {
                     "native"
                 } else if selected_evidence.is_none()
                     && evidence
                         .iter()
-                        .any(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
+                        .any(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts" | "rdp"))
                 {
                     "service_detection"
                 } else {
@@ -678,6 +679,20 @@ mod tests {
                 "result": {"banner": banner},
             }),
         }
+    }
+
+    #[test]
+    fn rdp_is_native_and_retains_negotiation_evidence() {
+        assert!(ProbeKind::Rdp.is_native());
+        let mut item = evidence("rdp", 3389, "success", None);
+        item.detail = json!({"result":{"confirmation":"rdp_negotiation_failure","failure_code":5}});
+        let observations = aggregate(&[item], &ServiceDetectionConfig::default());
+        assert_eq!(observations[0].service.as_deref(), Some("rdp"));
+        assert_eq!(observations[0].source, "native");
+        assert_eq!(
+            observations[0].data.as_ref().unwrap()["evidence"][0]["result"]["failure_code"],
+            5
+        );
     }
 
     #[test]

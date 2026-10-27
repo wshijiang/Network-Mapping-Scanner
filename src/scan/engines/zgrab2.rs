@@ -350,7 +350,7 @@ async fn run_zgrab_attempts(
 ) -> Result<ProcessOutcome, ScannerError> {
     let input = build_zgrab_input(attempts);
 
-    let config_file = TempZgrabConfig::create(config).await?;
+    let config_file = TempZgrabConfig::create(config, attempts).await?;
     let started_at = Instant::now();
     tracing::debug!(
         zgrab_path = %config.zgrab_path,
@@ -677,7 +677,7 @@ fn sanitize_json_value(value: Value) -> Value {
     }
 }
 
-fn bounded_detail(module_data: &Value, max_result_bytes: usize) -> Value {
+pub(super) fn bounded_detail(module_data: &Value, max_result_bytes: usize) -> Value {
     let mut module_data = sanitize_json_value(module_data.clone());
     let serialized_bytes = serde_json::to_vec(&module_data)
         .map(|value| value.len())
@@ -800,13 +800,20 @@ struct TempZgrabConfig {
 }
 
 impl TempZgrabConfig {
-    async fn create(config: &ServiceDetectionConfig) -> Result<Self, ScannerError> {
+    async fn create(
+        config: &ServiceDetectionConfig,
+        attempts: &[ProbeAttempt],
+    ) -> Result<Self, ScannerError> {
         let path = std::env::temp_dir().join(format!(
             "network-mapping-zgrab2-{}-{}.ini",
             std::process::id(),
             Uuid::now_v7()
         ));
-        tokio::fs::write(&path, zgrab_config(config)).await?;
+        tokio::fs::write(
+            &path,
+            zgrab_config(config, attempts.iter().map(|a| a.probe)),
+        )
+        .await?;
         Ok(Self { path })
     }
 
@@ -835,13 +842,20 @@ impl Drop for TempZgrabConfig {
     }
 }
 
-fn zgrab_config(config: &ServiceDetectionConfig) -> String {
+fn zgrab_config(
+    config: &ServiceDetectionConfig,
+    probes: impl IntoIterator<Item = ProbeKind>,
+) -> String {
     let timeout = format!(
         "connect-timeout=\"{}s\"\ntarget-timeout=\"{}s\"\n",
         config.connect_timeout_seconds, config.target_timeout_seconds
     );
     let mut output = String::from("[Application Options]\n\n");
-    for probe in ProbeKind::ALL.into_iter().filter(|p| !p.is_native()) {
+    let mut seen = std::collections::HashSet::new();
+    for probe in probes
+        .into_iter()
+        .filter(|p| !p.is_native() && seen.insert(*p))
+    {
         output.push_str(&format!(
             "[{}]\nname=\"{}\"\ntrigger=\"{}\"\nport={}\n{timeout}{}\n",
             probe.section(),
@@ -1180,8 +1194,40 @@ mod tests {
     }
 
     #[test]
+    fn config_contains_only_requested_external_modules_once() {
+        let config = zgrab_config(
+            &ServiceDetectionConfig::default(),
+            [
+                ProbeKind::Http,
+                ProbeKind::Http,
+                ProbeKind::Rdp,
+                ProbeKind::Dns,
+            ],
+        );
+        assert_eq!(config.matches("[http]").count(), 1);
+        for section in ["[rdp]", "[dns]", "[ssh]", "[ftp]"] {
+            assert!(!config.contains(section));
+        }
+        let all = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL);
+        assert!(!all.contains("[rdp]"));
+    }
+
+    #[test]
+    fn native_identity_is_safe_for_jsonb_and_obeys_result_budget() {
+        let identity = json!({"result":{"identity":{"vendor":"PLC\u{0000} vendor"},
+            "product_name":"device\u{0000}name"},"truncated":false});
+        let clean = bounded_detail(&identity, 1024);
+        assert_eq!(clean["result"]["product_name"], "devicename");
+        assert_eq!(clean["result"]["identity"]["vendor"], "PLC vendor");
+        let large = json!({"result":{"identity": "x".repeat(4096)},"truncated":false});
+        let bounded = bounded_detail(&large, 1024);
+        assert_eq!(bounded["truncated"], true);
+        assert!(serde_json::to_vec(&bounded).unwrap().len() <= 1024);
+    }
+
+    #[test]
     fn generated_config_routes_http_and_https_separately() {
-        let config = zgrab_config(&ServiceDetectionConfig::default());
+        let config = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL);
         assert!(config.contains("name=\"http\""));
         assert!(config.contains("name=\"https\""));
         assert!(config.contains("use-https=true"));
@@ -1190,7 +1236,7 @@ mod tests {
 
     #[test]
     fn generated_config_enables_implicit_tls_application_modules() {
-        let config = zgrab_config(&ServiceDetectionConfig::default());
+        let config = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL);
         assert!(config.contains("[smtp]\nname=\"smtps\""));
         assert!(config.contains("smtps=true"));
         assert!(config.contains("[ftp]\nname=\"ftps\""));

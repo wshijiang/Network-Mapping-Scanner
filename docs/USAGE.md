@@ -62,9 +62,32 @@ UDP 使用 plan v2 的 `udp_inventory`（DNS、EtherNet/IP UDP/44818、经典 BA
 
 完整支持矩阵、任务示例、参数边界和配套服务端投影迁移见[服务协议识别与部署](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。Worker 必须配套 [IPC 3 模块包](MODULE_UPDATES.md)。
 
+## RDP 识别与故障排查
+
+RDP 使用扫描器原生探测，默认端口为 TCP/3389，也可在服务识别任务中选择 `rdp` 并指定自定义端口。
+探测只发送 TPKT/X.224 连接请求及 RDP 协商请求，接受严格匹配的协商响应或 RDP 协商拒绝；
+`source=native`，握手证据包含 `confirmation` 及 `selected_protocol` 或 `failure_code`。
+协商拒绝说明目标使用 RDP，不表示允许登录；不发送凭据、不完成 TLS/CredSSP 或建立桌面会话，
+不能据此判断认证成功、证书有效或操作系统版本。仅返回旧式 X.224 确认而不带 RDP 协商数据的目标
+保持未确认，避免与 S7 等使用 X.224 的服务混淆。
+
+原生探测复用连接/目标超时、阶段累计期限、取消和限速。默认 adaptive 的 8 次预算不保证在未知
+非标准端口尝试 RDP；需要确定执行时显式选择 `rdp`，或使用有足够预算的 exhaustive 策略。
+
+旧版本出现 `could not find option group` 且涉及 `rdp`，说明生成的 INI 与 zgrab2 模块不兼容，
+不是目标拒绝远程桌面连接。当前镜像固定的 v1.0.0 不含 RDP；上游 `master` 已通过
+[PR #644](https://github.com/zmap/zgrab2/pull/644) 加入 RDP、TLS 和可选 NTLM 指纹，但截至
+2026-10-27 官方最新 Release 仍为 v1.0.0。本实现保持固定依赖版本，使用原生最小协商。
+升级配套 Agent/Worker 和模块包后，RDP 不再交给 zgrab2；
+外部引擎配置只包含本批使用的模块。只运行原生协议的探测批次不启动 zgrab2，
+混合/自动任务仍需要正确安装 zgrab2，并遵循节点的启动依赖检查。
+
+原生 TCP 与主动 UDP 握手也应用 `max_result_bytes`，清理字符串中的 NUL 并标记截断。
+截断后仍可保留已确认的服务名，但详情可能缺失；需要完整证据时可在允许范围内提高预算后重扫。
+
 ## 操作系统特征采集
 
-操作系统推断由服务端完成，节点继续使用已有 zgrab2 服务识别阶段，不增加扫描端口或探测
+操作系统推断由服务端完成，节点继续使用已有原生/zgrab2 服务识别阶段，不增加扫描端口或探测
 连接。选中的握手信息随 `ServiceObservation.data` 上传；普通 OpenSSH、nginx、SMB/RDP
 连接成功等信息不足时，服务端会保留未知。
 

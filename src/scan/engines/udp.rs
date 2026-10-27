@@ -276,7 +276,11 @@ pub(crate) async fn run(
                     "enip_udp" => "enip",
                     _ => "bacnet",
                 };
-                part.push(ScanObservation::Service(ServiceObservation{ip:port.ip.clone(),port:port.port,protocol:"udp".into(),service:Some(name.into()),banner:None,source:"native_udp".into(),data:Some(json!({"schema_version":2,"confidence":100,"selected_probe":service,"evidence":[{"role":"application_handshake","module":service,"result":result,"truncated":false}]})),observed_at:chrono::Utc::now().timestamp_millis()}));
+                let result = super::zgrab2::bounded_detail(
+                    &json!({"result":result,"truncated":false}),
+                    config.max_result_bytes,
+                );
+                part.push(ScanObservation::Service(ServiceObservation{ip:port.ip.clone(),port:port.port,protocol:"udp".into(),service:Some(name.into()),banner:None,source:"native_udp".into(),data:Some(json!({"schema_version":2,"confidence":100,"selected_probe":service,"evidence":[{"role":"application_handshake","module":service,"result":result["result"],"truncated":result["truncated"]}]})),observed_at:chrono::Utc::now().timestamp_millis()}));
             }
             // Per-target protocols remain serial; both global and per-IP maximum rate apply.
             let rate = config.server_rate_limit.clamp(1, 5);

@@ -12,6 +12,18 @@ This is the English entry point for the scanner component. The first translated 
 
 This component is preparing **0.1.21**, paired with server **0.1.30**, scanner **0.1.21**, and web console **0.1.24**. Release PRs remain open for review; version tags are local only. Existing installations must complete the transport endpoint migration before enabling new UDP tasks. Upgrade the Agent, Worker and complete module bundle together to IPC **3**, retaining node identity and pending results. See the [release and upgrade procedure (Chinese)](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md) and the change log above for scope, rollback and tag checks after merging.
 
+## Service detection fixes
+
+RDP now uses native TPKT/X.224 negotiation on TCP/3389 or an explicitly selected custom port.
+A validated negotiation response or rejection identifies the service; no credentials, TLS/CredSSP
+session or desktop session are attempted. Bare legacy X.224 confirms remain unidentified to avoid
+confusing RDP with other protocols. Automatic detection on custom ports remains subject to probe budgets.
+The pinned zgrab2 build has no RDP module, so RDP is excluded from its INI configuration. External
+configurations include only modules used in the current batch. Upgrade the matching Agent, Worker and
+module bundle; see the [usage and troubleshooting guide (Chinese)](../USAGE.md).
+Native TCP and active UDP evidence now also removes NUL characters and enforces `max_result_bytes`,
+marking truncated evidence instead of allowing invalid database strings or oversized handshake details.
+
 ## Related components
 
 - [Server documentation](https://github.com/wshijiang/network-mapping/blob/main/docs/README.md)
