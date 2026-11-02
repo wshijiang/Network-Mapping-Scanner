@@ -169,6 +169,28 @@ mod tests {
         );
         assert_eq!(batches[&Selection::Tls], ["[2001:db8::1]:636"]);
     }
+
+    #[test]
+    fn dual_http_https_detection_selects_https_web_target() {
+        use crate::scan::detection::{ProbeEvidence, aggregate};
+        use crate::types::ServiceDetectionConfig;
+
+        let endpoint = port(443);
+        let probes: Vec<_> = ["http", "https", "tls"]
+            .into_iter()
+            .map(|module| ProbeEvidence {
+                ip: endpoint.ip.clone(),
+                port: endpoint.port,
+                module: module.into(),
+                status: "success".into(),
+                banner: None,
+                detail: serde_json::json!({"status": "success", "result": {}}),
+            })
+            .collect();
+        let services = aggregate(&probes, &ServiceDetectionConfig::default());
+        let batches = build_batches(&[endpoint], &services, false);
+        assert_eq!(batches[&Selection::Web], ["https://[2001:db8::1]:443"]);
+    }
     #[test]
     fn unknown_web_ports_and_unsupported_services_never_scan_unrestricted() {
         assert!(

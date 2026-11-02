@@ -1494,6 +1494,123 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires ZGRAB2_TEST_BINARY built at the pinned revision"]
+    async fn real_zgrab_identifies_https_when_http_also_succeeds() {
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::net::TcpListener;
+        use tokio_rustls::{
+            TlsAcceptor,
+            rustls::{
+                self,
+                pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
+            },
+        };
+
+        std::env::var("ZGRAB2_TEST_BINARY").expect("zgrab2 binary");
+        let cert =
+            CertificateDer::pem_slice_iter(include_bytes!("encrypted_dns_fixtures/server.pem"))
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+        let key =
+            PrivateKeyDer::from_pem_slice(include_bytes!("encrypted_dns_fixtures/server.key"))
+                .unwrap();
+        let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(cert, key)
+        .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(tls));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let plain_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tls_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_plain = plain_requests.clone();
+        let server_tls = tls_requests.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                let plain = server_plain.clone();
+                let tls = server_tls.clone();
+                tokio::spawn(async move {
+                    let mut first = [0; 1];
+                    if stream.peek(&mut first).await.ok() != Some(1) {
+                        return;
+                    }
+                    let response =
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+                    let mut request = [0; 4096];
+                    if first[0] == 0x16 {
+                        if let Ok(mut stream) = acceptor.accept(stream).await
+                            && matches!(stream.read(&mut request).await, Ok(n) if n > 0)
+                        {
+                            tls.fetch_add(1, Ordering::Relaxed);
+                            let _ = stream.write_all(response).await;
+                        }
+                    } else if matches!(stream.read(&mut request).await, Ok(n) if n > 0) {
+                        plain.fetch_add(1, Ordering::Relaxed);
+                        let _ = stream.write_all(response).await;
+                    }
+                });
+            }
+        });
+
+        let wrapper = std::env::temp_dir().join(format!("zgrab-web-test-{}", Uuid::now_v7()));
+        std::fs::write(
+            &wrapper,
+            "#!/bin/sh\nexec \"$ZGRAB2_TEST_BINARY\" --blocklist-file /dev/null \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = ServiceDetectionConfig {
+            required_services: vec!["http".into(), "https".into(), "tls".into()],
+            zgrab_path: wrapper.to_string_lossy().into_owned(),
+            connect_timeout_seconds: 2,
+            target_timeout_seconds: 5,
+            ..Default::default()
+        };
+        let endpoint = open_port("127.0.0.1", port, "tcp");
+        let attempts = initial_attempts(std::slice::from_ref(&endpoint), &config);
+        let ProcessOutcome::Completed(raw) = run_attempts(
+            &config,
+            &attempts,
+            "ipv4",
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(15),
+        )
+        .await
+        .unwrap() else {
+            panic!("raw web probes did not complete")
+        };
+        for module in ["http", "https", "tls"] {
+            assert!(
+                raw.iter()
+                    .any(|e| e.module == module && e.status == "success")
+            );
+        }
+        let outcome = run(&config, &[endpoint], "ipv4", &AtomicBool::new(false))
+            .await
+            .unwrap();
+        server.abort();
+        std::fs::remove_file(wrapper).unwrap();
+        let EngineOutcome::Completed(results) = outcome else {
+            panic!("web probes did not complete")
+        };
+        assert_eq!(plain_requests.load(Ordering::Relaxed), 2);
+        assert_eq!(tls_requests.load(Ordering::Relaxed), 2);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].service.as_deref(), Some("https"));
+        let data = results[0].data.as_ref().unwrap();
+        assert_eq!(data["attempt_count"], 3);
+        assert_eq!(data["selected_probe"], "https");
+        assert_eq!(data["evidence"][0]["module"], "https");
+        assert_eq!(data["evidence"][1]["module"], "tls");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires ZGRAB2_TEST_BINARY built at the pinned revision"]
     async fn real_zgrab_modbus_preserves_confirmation_and_rejects_bad_frames() {
         use std::os::unix::fs::PermissionsExt;
         use tokio::net::TcpListener;
