@@ -85,13 +85,11 @@ async fn handshake(
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connect timeout"))??;
     match attempt.probe {
-        ProbeKind::Modbus
-        | ProbeKind::Enip
-        | ProbeKind::S7
-        | ProbeKind::Opcua
-        | ProbeKind::Mqtt => super::industrial::handshake(&mut stream, attempt, config)
-            .await
-            .map(|r| (None, r)),
+        ProbeKind::Enip | ProbeKind::S7 | ProbeKind::Opcua | ProbeKind::Mqtt => {
+            super::industrial::handshake(&mut stream, attempt, config)
+                .await
+                .map(|r| (None, r))
+        }
         ProbeKind::Dns => {
             let request = Request::new(UdpService::Dns)?;
             stream

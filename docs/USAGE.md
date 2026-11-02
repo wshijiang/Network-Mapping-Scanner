@@ -52,7 +52,9 @@ max_result_bytes = 65536
 
 ### DNS、加密 DNS、VNC 与工业协议
 
-原生 TCP 识别支持 `dns`、`vnc`、`dot`、`doh`、`modbus`、`enip`、`s7`、`opcua`、`mqtt`、`mqtts`。所有已实现 TCP 协议均属于自动识别候选，无需在创建页选择。端口映射覆盖 TCP/53、853、5900–5909、502、44818、102、4840、1883、8883 等；HTTPS 端口追加 DoH 确认。工业协议参与标准端口、adaptive 回退及 exhaustive 探测。MQTT/MQTTS 使用原生有界 CONNECT/CONNACK，支持 3.1.1/5.0 及合法认证拒绝。
+原生 TCP 识别支持 `dns`、`vnc`、`dot`、`doh`、`enip`、`s7`、`opcua`、`mqtt`、`mqtts`；`modbus` 使用固定版 zgrab2 模块。所有已实现 TCP 协议均属于自动识别候选，无需在创建页选择。端口映射覆盖 TCP/53、853、5900–5909、502、44818、102、4840、1883、8883 等；HTTPS 端口追加 DoH 确认。工业协议参与标准端口、adaptive 回退及 exhaustive 探测。Modbus 沿用指定 Unit ID 和有界响应校验，每个 zgrab2 进程使用随机请求 ID；关联的合法异常仍确认协议。MQTT/MQTTS 使用原生有界 CONNECT/CONNACK，支持 3.1.1/5.0 及合法认证拒绝。
+
+Modbus 改由 zgrab2 执行后会遵守其 blocklist；旧版原生 Modbus 不受该列表约束。镜像包含上游默认列表，其中屏蔽 RFC 1918 私有地址，因此内网节点需要部署方按实际授权配置 zgrab2 blocklist。被阻止的目标不会识别为 Modbus，扫描器会记录 `ModbusTargetsBlocklisted` 警告。
 
 TCP 默认省略或留空 `scan_plan.required_services`，使用完整自动识别策略；旧 API 的非空列表仍可限制探测范围。`service_probe_options` 无需选择协议即可提供 TLS 服务名、DoH 单一路径、额外公开 CA、Modbus Unit ID、S7 TSAP 和 MQTT 版本。TLS 默认验证证书并固定连接目标 IP，不重定向或绕过验证。非标准端口可能受节点探测预算和超时限制，自动识别不保证每次执行都尝试所有协议；HTTPS 成功后会在剩余预算内细分 DoH，合法 RFB 问候也可直接确认非标准端口的 VNC。
 

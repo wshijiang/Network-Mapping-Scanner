@@ -1576,6 +1576,7 @@ dependencies = [
 name = "scanner-rs"
 version = "0.1.21"
 dependencies = [
+ "base64",
  "chrono",
  "clap",
  "fs2",

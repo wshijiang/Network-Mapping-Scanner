@@ -151,10 +151,11 @@ masscan 不启用 banner 探测；服务识别继续由 zgrab2 完成。输出�
 #### `scan/engines/zgrab2.rs`
 
 zgrab2 使用 `multiple` 模式。扫描器把每个开放 TCP 端点编码成 `IP,,TAG,PORT`。
-`TAG` 根据端口映射为 `ssh`、`http`、`https`、`tls`、`smtp`、`mysql`、`postgres`
-等模块；未映射端口使用 `banner`。SMTPS、FTPS、IMAPS、POP3S、MQTTS 使用独立
-TAG，但分别复用 zgrab2 的 `smtp`、`ftp`、`imap`、`pop3`、`mqtt` 模块及其隐式
-TLS 参数。
+`TAG` 根据端口映射为 `ssh`、`http`、`https`、`tls`、`smtp`、`mysql`、`postgres`、
+`modbus` 等模块；未映射端口使用 `banner`。SMTPS、FTPS、IMAPS、POP3S 使用独立
+TAG，但分别复用 zgrab2 的 `smtp`、`ftp`、`imap`、`pop3` 模块及其隐式 TLS 参数。
+MQTT/MQTTS 使用原生握手。Modbus 的请求 ID 在每次启动 zgrab2 时随机生成，结果适配器
+校验响应和任务指定的 Unit ID，并将合法的协议异常作为已确认的服务保留。
 
 - `status=success`：写入规范化 `service`，并提取可用的短 banner；
 - 每个端点只保留最终服务关联的 `evidence`，不上传完整探测尝试和候选列表；
@@ -164,8 +165,8 @@ TLS 参数。
   错误、原大小及预算内的系统字段。两条路径均上报 `evidence[].truncated=true`。
 
 已知隐式 TLS 端口优先执行应用协议：465 → SMTPS、990 → FTPS、993 → IMAPS、
-995 → POP3S、8883 → MQTTS。636（LDAPS）、853（DNS over TLS）以及 989（FTPS
-数据通道）目前仍只执行通用 TLS，因为扫描器尚无相应应用握手模块。自适应模式在非标准
+995 → POP3S、8883 → MQTTS；853 使用原生 DoT 应用确认。636（LDAPS）和 989（FTPS
+数据通道）目前只执行通用 TLS，因为扫描器尚无相应应用握手模块。自适应模式在非标准
 端口只获得 TLS 时不会提前结束，而会在剩余连接预算中优先尝试安全应用协议。
 
 若 `required=false`，zgrab2 进程启动失败或非零退出只记录警告，masscan 端口结果照常上报；

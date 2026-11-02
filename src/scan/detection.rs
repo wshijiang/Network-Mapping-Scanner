@@ -149,7 +149,6 @@ impl ProbeKind {
             Self::Smtps => "smtp",
             Self::Pop3s => "pop3",
             Self::Imaps => "imap",
-            Self::Mqtts => "mqtt",
             value => value.name(),
         }
     }
@@ -196,7 +195,6 @@ impl ProbeKind {
             Self::Smtps => "smtps=true\n",
             Self::Pop3s => "pop3s=true\n",
             Self::Imaps => "imaps=true\n",
-            Self::Mqtts => "tls=true\n",
             _ => "",
         }
     }
@@ -208,7 +206,6 @@ impl ProbeKind {
                 | Self::Vnc
                 | Self::Dot
                 | Self::Doh
-                | Self::Modbus
                 | Self::Enip
                 | Self::S7
                 | Self::Opcua
@@ -420,16 +417,16 @@ pub(crate) fn aggregate(
                 service: selected.map(|candidate| candidate.service.clone()),
                 banner,
                 source: if selected_evidence
-                    .is_some_and(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
+                    .is_some_and(|item| ProbeKind::from_name(&item.module).is_some_and(ProbeKind::is_native))
                     || evidence
                         .iter()
-                        .all(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
+                        .all(|item| ProbeKind::from_name(&item.module).is_some_and(ProbeKind::is_native))
                 {
                     "native"
                 } else if selected_evidence.is_none()
                     && evidence
                         .iter()
-                        .any(|item| matches!(item.module.as_str(), "dns" | "vnc" | "dot" | "doh" | "modbus" | "enip" | "s7" | "opcua" | "mqtt" | "mqtts"))
+                        .any(|item| ProbeKind::from_name(&item.module).is_some_and(ProbeKind::is_native))
                 {
                     "service_detection"
                 } else {
