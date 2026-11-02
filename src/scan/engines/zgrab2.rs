@@ -451,6 +451,13 @@ async fn run_zgrab_attempts(
     let mut output_bytes = 0usize;
     let mut results = Vec::new();
     let mut invalid_lines = 0usize;
+    let mut previous_in_flight = 0usize;
+    let in_flight = || {
+        permits.as_ref().map(|permits| {
+            (config.senders.max(1) as usize).saturating_sub(permits.available_permits())
+        })
+    };
+    let idle_timeout = Duration::from_secs(config.idle_timeout_seconds);
 
     loop {
         if cancel_requested.load(Ordering::Relaxed) {
@@ -462,6 +469,21 @@ async fn run_zgrab_attempts(
             return Ok(ProcessOutcome::Cancelled);
         }
 
+        let current_in_flight = in_flight();
+        if let Some(current) = current_in_flight {
+            // A new probe starts a fresh idle interval after a paced pause.
+            if previous_in_flight == 0 && current > 0 {
+                last_progress = Instant::now();
+            }
+            previous_in_flight = current;
+        }
+        // When no Modbus probes are in flight, the writer may intentionally
+        // wait up to one rate-limit interval before submitting the next one.
+        let pacing_grace = if current_in_flight == Some(0) && !input_handle.is_finished() {
+            gap
+        } else {
+            Duration::ZERO
+        };
         let line = tokio::select! {
             line = read_bounded_line(&mut reader, &mut line_buffer, config.max_result_bytes.saturating_mul(32).clamp(65536, 8*1024*1024)) => match line {
                 Ok(line) => line,
@@ -478,7 +500,24 @@ async fn run_zgrab_attempts(
                 let _ = finish_zgrab_stderr(stderr_handle).await;
                 return Ok(ProcessOutcome::TimedOut(results, "service_detection_runtime_exceeded"));
             },
-            _ = sleep(Duration::from_secs(config.idle_timeout_seconds).saturating_sub(last_progress.elapsed())) => {
+            _ = sleep((idle_timeout + pacing_grace).saturating_sub(last_progress.elapsed())) => {
+                // A target can be submitted as the timer fires. Recheck before
+                // killing the process so that new work gets its idle interval.
+                let current = in_flight();
+                if let Some(current) = current {
+                    if previous_in_flight == 0 && current > 0 {
+                        last_progress = Instant::now();
+                    }
+                    previous_in_flight = current;
+                }
+                let grace = if current == Some(0) && !input_handle.is_finished() {
+                    gap
+                } else {
+                    Duration::ZERO
+                };
+                if last_progress.elapsed() < idle_timeout + grace {
+                    continue;
+                }
                 let _ = child.kill().await;
                 input_handle.abort();
                 let _ = finish_zgrab_stderr(stderr_handle).await;
@@ -648,7 +687,7 @@ async fn write_paced_modbus_input<W: AsyncWrite + Unpin>(
     ready
         .await
         .map_err(|_| std::io::Error::other("zgrab2 did not signal startup"))?;
-    let mut next = Instant::now() + gap;
+    let mut next = Instant::now();
     for line in input.lines() {
         tokio::time::sleep_until(next).await;
         let permit = permits
@@ -1497,6 +1536,8 @@ mod tests {
                     ..Default::default()
                 },
                 zgrab_path: wrapper.to_string_lossy().into_owned(),
+                server_rate_limit: 1,
+                idle_timeout_seconds: 1,
                 target_timeout_seconds: 3,
                 connect_timeout_seconds: 1,
                 ..Default::default()
@@ -1530,6 +1571,57 @@ mod tests {
                 assert_eq!(results[0].service, None);
             }
         }
+
+        // Exercise the idle watchdog between two real, rate-limited probes.
+        let mut endpoints = Vec::new();
+        let mut servers = Vec::new();
+        for _ in 0..2 {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            endpoints.push(open_port(
+                "127.0.0.1",
+                listener.local_addr().unwrap().port(),
+                "tcp",
+            ));
+            servers.push(tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 11];
+                stream.read_exact(&mut request).await.unwrap();
+                let mut response = request[..7].to_vec();
+                response[4..6].copy_from_slice(&3u16.to_be_bytes());
+                response.extend_from_slice(&[0xab, 2]);
+                stream.write_all(&response).await.unwrap();
+            }));
+        }
+        let config = ServiceDetectionConfig {
+            required_services: vec!["modbus".into()],
+            zgrab_path: wrapper.to_string_lossy().into_owned(),
+            server_rate_limit: 1,
+            idle_timeout_seconds: 1,
+            target_timeout_seconds: 3,
+            connect_timeout_seconds: 1,
+            senders: 2,
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let outcome = run(&config, &endpoints, "ipv4", &AtomicBool::new(false))
+            .await
+            .unwrap();
+        for server in servers {
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let EngineOutcome::Completed(results) = outcome else {
+            panic!("rate-limited Modbus probes must not hit the idle timeout")
+        };
+        assert_eq!(results.len(), 2);
+        assert!(
+            results
+                .iter()
+                .all(|result| result.service.as_deref() == Some("modbus"))
+        );
+        assert!(started.elapsed() >= Duration::from_millis(900));
         std::fs::remove_file(wrapper).unwrap();
     }
 
@@ -1685,7 +1777,6 @@ mod tests {
         ready.send(()).unwrap();
         tokio::task::yield_now().await;
         let mut line = String::new();
-        tokio::time::advance(Duration::from_secs(1)).await;
         reader.read_line(&mut line).await.unwrap();
         assert_eq!(line, "first\n");
         line.clear();
@@ -1767,6 +1858,101 @@ for line in sys.stdin:
         assert_eq!(evidence["exception_code"], 2);
         assert_eq!(results[1].service, None);
         assert_eq!(results[1].source, "zgrab2");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn responsive_modbus_targets_survive_idle_timeout_during_pacing() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("paced-zgrab-{}", Uuid::now_v7()));
+        std::fs::write(
+            &path,
+            r##"#!/usr/bin/env python3
+import base64, json, sys
+print('started grab at test', file=sys.stderr, flush=True)
+path = sys.argv[sys.argv.index('--config-file') + 1]
+options = dict(line.strip().split('=', 1) for line in open(path, encoding='utf-8') if '=' in line)
+request_id, unit = int(options['request-id']), int(options['unit-id'])
+for line in sys.stdin:
+    ip, _, tag, port = line.strip().split(',')
+    raw = request_id.to_bytes(2, 'big') + b'\0\0\0\3' + bytes([unit, 0xab, 2])
+    print(json.dumps({'ip': ip, 'data': {tag: {'status': 'application-error',
+        'port': int(port), 'result': {'raw': base64.b64encode(raw).decode()}}}}), flush=True)
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = ServiceDetectionConfig {
+            zgrab_path: path.to_string_lossy().into_owned(),
+            required_services: vec!["modbus".into()],
+            server_rate_limit: 1,
+            idle_timeout_seconds: 1,
+            max_runtime_seconds: 5,
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let outcome = run(
+            &config,
+            &[
+                open_port("192.0.2.1", 502, "tcp"),
+                open_port("192.0.2.2", 502, "tcp"),
+            ],
+            "ipv4",
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+        let EngineOutcome::Completed(results) = outcome else {
+            panic!("responsive Modbus targets must not hit the idle timeout")
+        };
+        assert_eq!(results.len(), 2);
+        assert!(
+            results
+                .iter()
+                .all(|item| item.service.as_deref() == Some("modbus"))
+        );
+        assert!(started.elapsed() >= Duration::from_millis(900));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_modbus_engine_still_hits_idle_timeout_during_pacing() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("stalled-zgrab-{}", Uuid::now_v7()));
+        std::fs::write(
+            &path,
+            "#!/bin/sh\nprintf 'started grab at test\\n' >&2\nread -r line\nexec sleep 60\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = ServiceDetectionConfig {
+            zgrab_path: path.to_string_lossy().into_owned(),
+            required_services: vec!["modbus".into()],
+            server_rate_limit: 1,
+            idle_timeout_seconds: 1,
+            max_runtime_seconds: 5,
+            senders: 2,
+            ..Default::default()
+        };
+        let started = std::time::Instant::now();
+        let outcome = run(
+            &config,
+            &[
+                open_port("192.0.2.1", 502, "tcp"),
+                open_port("192.0.2.2", 502, "tcp"),
+                open_port("192.0.2.3", 502, "tcp"),
+            ],
+            "ipv4",
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            matches!(outcome, EngineOutcome::Partial(_, reason) if reason == "service_detection_idle_timeout")
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
     }
 
     #[cfg(unix)]
