@@ -22,61 +22,12 @@ pub(super) async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(
     c: &ServiceDetectionConfig,
 ) -> io::Result<Value> {
     match a.probe {
-        ProbeKind::Modbus => modbus(s, c.probe_options.modbus_unit_id.unwrap_or(1)).await,
         ProbeKind::Enip => enip(s).await,
         ProbeKind::S7 => s7(s, c.probe_options.s7_tsap.unwrap_or(0x0102)).await,
         ProbeKind::Opcua => opcua(s, a).await,
         ProbeKind::Mqtt => mqtt(s, c.probe_options.mqtt_version.unwrap_or(4)).await,
         _ => Err(invalid()),
     }
-}
-async fn modbus<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, unit: u8) -> io::Result<Value> {
-    let id = random::<2>()?;
-    s.write_all(&[id[0], id[1], 0, 0, 0, 5, unit, 0x2b, 0x0e, 1, 0])
-        .await?;
-    let mut h = [0; 7];
-    s.read_exact(&mut h).await?;
-    let length = u16::from_be_bytes([h[4], h[5]]) as usize;
-    if h[..2] != id || h[2..4] != [0, 0] || h[6] != unit || !(3..=254).contains(&length) {
-        return Err(invalid());
-    }
-    let mut p = vec![0; length - 1];
-    s.read_exact(&mut p).await?;
-    if p[0] == 0xab && p.len() == 2 && matches!(p[1], 1..=8 | 10 | 11) {
-        return Ok(json!({"unit_id":unit,"exception_code":p[1],"device_identity_supported":false}));
-    }
-    if p.len() < 7
-        || p[..3] != [0x2b, 0x0e, 1]
-        || !matches!(p[3],1..=3|0x81..=0x83)
-        || !matches!(p[4], 0 | 255)
-    {
-        return Err(invalid());
-    }
-    let mut at = 7;
-    let mut objects = serde_json::Map::new();
-    for _ in 0..p[6] {
-        let h = p.get(at..at + 2).ok_or_else(invalid)?;
-        let n = h[1] as usize;
-        let bytes = p.get(at + 2..at + 2 + n).ok_or_else(invalid)?;
-        if h[0] <= 2 {
-            objects.insert(
-                ["vendor", "product", "revision"][h[0] as usize].into(),
-                json!(
-                    String::from_utf8_lossy(bytes)
-                        .chars()
-                        .take(128)
-                        .collect::<String>()
-                ),
-            );
-        }
-        at += 2 + n;
-    }
-    if at != p.len() {
-        return Err(invalid());
-    }
-    Ok(
-        json!({"unit_id":unit,"device_identity_supported":true,"identity":objects,"more_follows":p[4]==255}),
-    )
 }
 pub(crate) fn enip_request() -> io::Result<Vec<u8>> {
     let mut h = vec![0; 24];
@@ -392,30 +343,6 @@ fn connack_properties(bytes: &[u8]) -> bool {
 mod tests {
     use super::*;
     use tokio::io::duplex;
-    #[tokio::test]
-    async fn modbus_correlates_transaction_and_unit_and_accepts_restricted_exception() {
-        for wrong in [false, true] {
-            let (mut client, mut server) = duplex(1024);
-            let peer = tokio::spawn(async move {
-                let mut req = [0; 11];
-                server.read_exact(&mut req).await.unwrap();
-                assert_eq!(&req[7..], &[0x2b, 0x0e, 1, 0]);
-                let mut response = req[..7].to_vec();
-                response[4..6].copy_from_slice(&3u16.to_be_bytes());
-                if wrong {
-                    response[0] ^= 1;
-                }
-                response.extend([0xab, 1]);
-                server.write_all(&response).await.unwrap();
-            });
-            let result = modbus(&mut client, 7).await;
-            assert_eq!(result.is_ok(), !wrong);
-            if let Ok(v) = result {
-                assert_eq!(v["device_identity_supported"], false);
-            }
-            peer.await.unwrap();
-        }
-    }
     #[test]
     fn enip_requires_identity_layout_and_sender_context() {
         let req = enip_request().unwrap();

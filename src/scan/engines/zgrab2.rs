@@ -6,9 +6,15 @@ use crate::scan::{PortObservation, ServiceObservation};
 use crate::types::ServiceDetectionConfig;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
+};
 use tokio::process::{ChildStderr, Command};
+use tokio::sync::{Semaphore, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
 use tokio::time::{Duration, sleep};
@@ -288,17 +294,30 @@ async fn run_attempts(
 ) -> Result<ProcessOutcome, ScannerError> {
     let external: Vec<_> = attempts
         .iter()
-        .filter(|a| !a.probe.is_native())
+        .filter(|a| !a.probe.is_native() && a.probe != ProbeKind::Modbus)
         .cloned()
         .collect();
-    let mut evidence = if external.is_empty() {
-        Vec::new()
-    } else {
-        match run_zgrab_attempts(config, &external, address_family, cancel, deadline).await? {
-            ProcessOutcome::Completed(e) => e,
-            other => return Ok(other),
+    // Modbus has its own process so its global pacing does not depend on
+    // unrelated zgrab2 workers or their buffered input.
+    let modbus: Vec<_> = attempts
+        .iter()
+        .filter(|a| a.probe == ProbeKind::Modbus)
+        .cloned()
+        .collect();
+    let mut evidence = Vec::new();
+    for group in [&external, &modbus] {
+        if group.is_empty() {
+            continue;
         }
-    };
+        match run_zgrab_attempts(config, group, address_family, cancel, deadline).await? {
+            ProcessOutcome::Completed(mut items) => evidence.append(&mut items),
+            ProcessOutcome::TimedOut(mut items, reason) => {
+                evidence.append(&mut items);
+                return Ok(ProcessOutcome::TimedOut(evidence, reason));
+            }
+            ProcessOutcome::Cancelled => return Ok(ProcessOutcome::Cancelled),
+        }
+    }
     let gap = Duration::from_secs_f64(1.0 / f64::from(config.server_rate_limit.max(1)));
     let native: Vec<_> = attempts.iter().filter(|a| a.probe.is_native()).collect();
     let mut running = JoinSet::new();
@@ -405,11 +424,25 @@ async fn run_zgrab_attempts(
         .take()
         .ok_or_else(|| ScannerError::Scan("zgrab2 stderr unavailable".into()))?;
 
+    let paced_modbus = attempts
+        .iter()
+        .all(|attempt| attempt.probe == ProbeKind::Modbus);
+    let permits = paced_modbus.then(|| Arc::new(Semaphore::new(config.senders.max(1) as usize)));
+    let (ready_sender, ready_receiver) = oneshot::channel();
+    let stderr_handle = tokio::spawn(collect_zgrab_stderr(
+        stderr,
+        paced_modbus.then_some(ready_sender),
+    ));
+    let input_permits = permits.clone();
+    let gap = Duration::from_secs_f64(1.0 / f64::from(config.server_rate_limit.max(1)));
     let input_handle = tokio::spawn(async move {
-        stdin.write_all(input.as_bytes()).await?;
-        stdin.shutdown().await
+        if let Some(permits) = input_permits {
+            write_paced_modbus_input(stdin, input, ready_receiver, permits, gap).await
+        } else {
+            stdin.write_all(input.as_bytes()).await?;
+            stdin.shutdown().await
+        }
     });
-    let stderr_handle = tokio::spawn(collect_zgrab_stderr(stderr));
     let mut reader = BufReader::new(stdout);
     let mut line_buffer = Vec::new();
     let mut last_progress = Instant::now();
@@ -461,6 +494,9 @@ async fn run_zgrab_attempts(
             _ = sleep(Duration::from_millis(200)) => continue,
         };
         let Some(line) = line else { break };
+        if let Some(permits) = &permits {
+            permits.add_permits(1);
+        }
         last_progress = Instant::now();
         output_bytes = output_bytes.saturating_add(line.len());
         if output_bytes > 64 * 1024 * 1024 {
@@ -472,7 +508,7 @@ async fn run_zgrab_attempts(
                 "service_detection_evidence_limit",
             ));
         }
-        match parse_zgrab_line(&line, config.max_result_bytes) {
+        match parse_zgrab_line(&line, config.max_result_bytes, config_file.modbus) {
             Ok(mut parsed) => results.append(&mut parsed),
             Err(error) => {
                 invalid_lines += 1;
@@ -553,6 +589,20 @@ async fn run_zgrab_attempts(
         return Ok(ProcessOutcome::Cancelled);
     }
 
+    let blocked = results
+        .iter()
+        .filter(|item| item.module == "modbus" && item.status == "blocklisted-target")
+        .count();
+    if blocked > 0 {
+        tracing::warn!(
+            event = "ModbusTargetsBlocklisted",
+            error_code = "zgrab2_target_blocklisted",
+            blocked_count = blocked,
+            outcome = "modbus_not_identified",
+            "zgrab2 blocklist prevented Modbus probes"
+        );
+    }
+
     tracing::info!(
         event = "ServiceDetectionCompleted",
         exit_code = ?status.code(),
@@ -586,6 +636,33 @@ async fn run_zgrab_attempts(
     Ok(ProcessOutcome::Completed(results))
 }
 
+async fn write_paced_modbus_input<W: AsyncWrite + Unpin>(
+    mut writer: W,
+    input: String,
+    ready: oneshot::Receiver<()>,
+    permits: Arc<Semaphore>,
+    gap: Duration,
+) -> std::io::Result<()> {
+    // The pinned binary emits this only after its CLI and module configuration
+    // have initialized. Do not build a queue while the process is starting.
+    ready
+        .await
+        .map_err(|_| std::io::Error::other("zgrab2 did not signal startup"))?;
+    let mut next = Instant::now() + gap;
+    for line in input.lines() {
+        tokio::time::sleep_until(next).await;
+        let permit = permits
+            .acquire()
+            .await
+            .map_err(|_| std::io::Error::other("zgrab2 input closed"))?;
+        writer.write_all(line.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        permit.forget();
+        next = Instant::now() + gap;
+    }
+    writer.shutdown().await
+}
+
 fn build_zgrab_input(attempts: &[ProbeAttempt]) -> String {
     let mut input = String::new();
     for attempt in attempts {
@@ -602,6 +679,7 @@ fn build_zgrab_input(attempts: &[ProbeAttempt]) -> String {
 fn parse_zgrab_line(
     line: &str,
     max_result_bytes: usize,
+    modbus: Option<ModbusContext>,
 ) -> Result<Vec<ProbeEvidence>, ScannerError> {
     let root: Value = serde_json::from_str(line)?;
     let ip = root
@@ -623,10 +701,31 @@ fn parse_zgrab_line(
             tracing::warn!(%ip, %module, "zgrab2 module result is missing a valid port");
             continue;
         };
-        let status = module_data
+        let upstream_status = module_data
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
+        let (status, detail) =
+            if module == "modbus" && matches!(upstream_status, "success" | "application-error") {
+                let normalized = modbus.and_then(|context| {
+                    super::modbus::normalize(
+                        module_data.get("result")?,
+                        upstream_status,
+                        context.request_id,
+                        context.unit,
+                    )
+                });
+                match normalized {
+                    Some(result) => ("success", json!({"status":"success","result":result})),
+                    None => (
+                        "protocol-error",
+                        json!({"status":"protocol-error",
+                    "error":"invalid_modbus_response"}),
+                    ),
+                }
+            } else {
+                (upstream_status, module_data.clone())
+            };
         let banner = (status == "success")
             .then(|| extract_banner(module_data))
             .flatten();
@@ -636,7 +735,7 @@ fn parse_zgrab_line(
             module: module.to_owned(),
             status: status.to_owned(),
             banner,
-            detail: bounded_detail(module_data, max_result_bytes),
+            detail: bounded_detail(&detail, max_result_bytes),
         });
     }
     Ok(results)
@@ -822,8 +921,15 @@ fn retain_compact_field(summary: &mut Value, path: &str, value: Value, budget: u
     }
 }
 
+#[derive(Clone, Copy)]
+struct ModbusContext {
+    request_id: u16,
+    unit: u8,
+}
+
 struct TempZgrabConfig {
     path: PathBuf,
+    modbus: Option<ModbusContext>,
 }
 
 impl TempZgrabConfig {
@@ -831,6 +937,20 @@ impl TempZgrabConfig {
         config: &ServiceDetectionConfig,
         attempts: &[ProbeAttempt],
     ) -> Result<Self, ScannerError> {
+        let modbus = if attempts
+            .iter()
+            .any(|attempt| attempt.probe == ProbeKind::Modbus)
+        {
+            let mut request_id = [0; 2];
+            ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut request_id)
+                .map_err(|_| ScannerError::Scan("platform random source unavailable".into()))?;
+            Some(ModbusContext {
+                request_id: u16::from_be_bytes(request_id),
+                unit: config.probe_options.modbus_unit_id.unwrap_or(1),
+            })
+        } else {
+            None
+        };
         let path = std::env::temp_dir().join(format!(
             "network-mapping-zgrab2-{}-{}.ini",
             std::process::id(),
@@ -838,10 +958,14 @@ impl TempZgrabConfig {
         ));
         tokio::fs::write(
             &path,
-            zgrab_config(config, attempts.iter().map(|a| a.probe)),
+            zgrab_config(
+                config,
+                attempts.iter().map(|a| a.probe),
+                modbus.map_or(0, |context| context.request_id),
+            ),
         )
         .await?;
-        Ok(Self { path })
+        Ok(Self { path, modbus })
     }
 
     fn path_string(&self) -> Result<&str, ScannerError> {
@@ -872,6 +996,7 @@ impl Drop for TempZgrabConfig {
 fn zgrab_config(
     config: &ServiceDetectionConfig,
     probes: impl IntoIterator<Item = ProbeKind>,
+    modbus_request_id: u16,
 ) -> String {
     let timeout = format!(
         "connect-timeout=\"{}s\"\ntarget-timeout=\"{}s\"\n",
@@ -883,13 +1008,22 @@ fn zgrab_config(
         .into_iter()
         .filter(|p| !p.is_native() && seen.insert(*p))
     {
+        let extra = if probe == ProbeKind::Modbus {
+            format!(
+                "unit-id={}\nrequest-id={}\n",
+                config.probe_options.modbus_unit_id.unwrap_or(1),
+                modbus_request_id,
+            )
+        } else {
+            probe.extra_config().to_owned()
+        };
         output.push_str(&format!(
             "[{}]\nname=\"{}\"\ntrigger=\"{}\"\nport={}\n{timeout}{}\n",
             probe.section(),
             probe.name(),
             probe.name(),
             probe.default_port(),
-            probe.extra_config(),
+            extra,
         ));
     }
     output
@@ -929,9 +1063,13 @@ async fn read_bounded_line<R: AsyncBufRead + Unpin>(
     }
 }
 
-async fn collect_zgrab_stderr(mut stderr: ChildStderr) -> StderrCapture {
+async fn collect_zgrab_stderr(
+    mut stderr: ChildStderr,
+    mut ready: Option<oneshot::Sender<()>>,
+) -> StderrCapture {
     let mut capture = StderrCapture::default();
     let mut chunk = [0u8; 8192];
+    let mut startup_tail = String::new();
     while let Ok(count) = stderr.read(&mut chunk).await {
         if count == 0 {
             break;
@@ -939,6 +1077,23 @@ async fn collect_zgrab_stderr(mut stderr: ChildStderr) -> StderrCapture {
         capture.bytes = capture.bytes.saturating_add(count);
         let remaining = MAX_ZGRAB_STDERR_CHARS.saturating_sub(capture.text.chars().count());
         let text = String::from_utf8_lossy(&chunk[..count]);
+        if ready.is_some() {
+            startup_tail.push_str(&text);
+            if startup_tail.contains("started grab at") {
+                if let Some(sender) = ready.take() {
+                    let _ = sender.send(());
+                }
+            } else if startup_tail.len() > 128 {
+                startup_tail = startup_tail
+                    .chars()
+                    .rev()
+                    .take(128)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+            }
+        }
         capture.text.extend(text.chars().take(remaining));
         capture.truncated |= text.chars().count() > remaining;
     }
@@ -1133,7 +1288,7 @@ mod tests {
     #[test]
     fn successful_http_result_is_normalized() {
         let line = r#"{"ip":"192.0.2.1","data":{"http":{"status":"success","protocol":"http","port":8080,"result":{"response":{"status_line":"HTTP/1.1 200 OK"}}}}}"#;
-        let results = parse_zgrab_line(line, 65_536).unwrap();
+        let results = parse_zgrab_line(line, 65_536, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].module, "http");
         assert_eq!(results[0].status, "success");
@@ -1142,9 +1297,49 @@ mod tests {
     }
 
     #[test]
+    fn modbus_exception_is_confirmed_only_after_response_correlation() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let context = ModbusContext {
+            request_id: 0x1234,
+            unit: 7,
+        };
+        let make_line = |raw: &[u8]| {
+            json!({"ip":"192.0.2.1","data":{"modbus":{
+                "status":"application-error", "port":502, "result":{"raw":STANDARD.encode(raw)}
+            }}})
+            .to_string()
+        };
+        let line = make_line(&[0x12, 0x34, 0, 0, 0, 3, 7, 0xab, 2]);
+        let evidence = parse_zgrab_line(&line, 65_536, Some(context)).unwrap();
+        let observations = aggregate(&evidence, &ServiceDetectionConfig::default());
+        assert_eq!(observations[0].service.as_deref(), Some("modbus"));
+        assert_eq!(observations[0].source, "zgrab2");
+        assert_eq!(
+            observations[0].data.as_ref().unwrap()["evidence"][0]["result"]["exception_code"],
+            2
+        );
+        assert_eq!(
+            observations[0].data.as_ref().unwrap()["evidence"][0]["result"]["upstream_status"],
+            "application-error"
+        );
+
+        let line = make_line(&[0x12, 0x35, 0, 0, 0, 3, 7, 0xab, 2]);
+        let evidence = parse_zgrab_line(&line, 65_536, Some(context)).unwrap();
+        assert_eq!(evidence[0].status, "protocol-error");
+        assert_eq!(
+            aggregate(&evidence, &ServiceDetectionConfig::default())[0].service,
+            None
+        );
+        assert_eq!(
+            parse_zgrab_line(&line, 65_536, None).unwrap()[0].status,
+            "protocol-error"
+        );
+    }
+
+    #[test]
     fn failed_probe_preserves_status_and_detail() {
         let line = r#"{"ip":"192.0.2.2","data":{"ssh":{"status":"connection-timeout","protocol":"ssh","port":22,"error":"timeout"}}}"#;
-        let results = parse_zgrab_line(line, 65_536).unwrap();
+        let results = parse_zgrab_line(line, 65_536, None).unwrap();
         assert_eq!(results[0].port, 22);
         assert_eq!(results[0].status, "connection-timeout");
         assert_eq!(results[0].detail["status"], "connection-timeout");
@@ -1156,7 +1351,7 @@ mod tests {
             r#"{{"ip":"192.0.2.3","data":{{"banner":{{"status":"success","protocol":"banner","port":9000,"result":{{"banner":"{}"}}}}}}}}"#,
             "x".repeat(2048)
         );
-        let results = parse_zgrab_line(&line, 1024).unwrap();
+        let results = parse_zgrab_line(&line, 1024, None).unwrap();
         assert_eq!(results[0].detail["truncated"], true);
     }
 
@@ -1174,7 +1369,7 @@ mod tests {
                 }
             });
             let line = json!({"ip": "192.0.2.1", "data": {"https": detail}}).to_string();
-            let probes = parse_zgrab_line(&line, 65_536).unwrap();
+            let probes = parse_zgrab_line(&line, 65_536, None).unwrap();
             let retained = &probes[0].detail;
             assert!(serde_json::to_vec(retained).unwrap().len() <= 65_536);
             assert_eq!(
@@ -1255,6 +1450,87 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires ZGRAB2_TEST_BINARY built at the pinned revision"]
+    async fn real_zgrab_modbus_preserves_confirmation_and_rejects_bad_frames() {
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::net::TcpListener;
+
+        std::env::var("ZGRAB2_TEST_BINARY").expect("zgrab2 binary");
+        let wrapper = std::env::temp_dir().join(format!("zgrab-modbus-test-{}", Uuid::now_v7()));
+        std::fs::write(
+            &wrapper,
+            "#!/bin/sh\nexec \"$ZGRAB2_TEST_BINARY\" --blocklist-file /dev/null \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for mode in ["identity", "exception", "wrong_unit", "bad_object"] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 11];
+                stream.read_exact(&mut request).await.unwrap();
+                assert_eq!(&request[2..], &[0, 0, 0, 5, 7, 0x2b, 0x0e, 1, 0]);
+                let payload: &[u8] = match mode {
+                    "exception" => &[0xab, 2],
+                    "bad_object" => &[0x2b, 0x0e, 1, 1, 0, 0, 1, 0, 2, b'A'],
+                    _ => &[0x2b, 0x0e, 1, 1, 0, 0, 1, 0, 2, b'A', b'B'],
+                };
+                let mut response = request[..7].to_vec();
+                response[4..6].copy_from_slice(&((payload.len() + 1) as u16).to_be_bytes());
+                if mode == "wrong_unit" {
+                    response[6] = 8;
+                }
+                response.extend_from_slice(payload);
+                for byte in response {
+                    stream.write_all(&[byte]).await.unwrap();
+                }
+            });
+            let config = ServiceDetectionConfig {
+                required_services: vec!["modbus".into()],
+                probe_options: crate::types::ServiceProbeOptions {
+                    modbus_unit_id: Some(7),
+                    ..Default::default()
+                },
+                zgrab_path: wrapper.to_string_lossy().into_owned(),
+                target_timeout_seconds: 3,
+                connect_timeout_seconds: 1,
+                ..Default::default()
+            };
+            let outcome = run(
+                &config,
+                &[open_port("127.0.0.1", port, "tcp")],
+                "ipv4",
+                &AtomicBool::new(false),
+            )
+            .await
+            .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+            let EngineOutcome::Completed(results) = outcome else {
+                panic!("incomplete")
+            };
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].source, "zgrab2");
+            if matches!(mode, "identity" | "exception") {
+                assert_eq!(results[0].service.as_deref(), Some("modbus"));
+                let result = &results[0].data.as_ref().unwrap()["evidence"][0]["result"];
+                if mode == "identity" {
+                    assert_eq!(result["identity"]["vendor"], "AB");
+                } else {
+                    assert_eq!(result["exception_code"], 2);
+                }
+            } else {
+                assert_eq!(results[0].service, None);
+            }
+        }
+        std::fs::remove_file(wrapper).unwrap();
     }
 
     #[cfg(unix)]
@@ -1360,13 +1636,197 @@ mod tests {
                 ProbeKind::Rdp,
                 ProbeKind::Dns,
             ],
+            0,
         );
         assert_eq!(config.matches("[http]").count(), 1);
         for section in ["[dns]", "[ssh]", "[ftp]"] {
             assert!(!config.contains(section));
         }
-        let all = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL);
+        let all = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL, 0);
         assert!(all.contains("[rdp]"));
+    }
+
+    #[tokio::test]
+    async fn modbus_config_uses_task_unit_and_per_process_request_id() {
+        let config = ServiceDetectionConfig {
+            probe_options: crate::types::ServiceProbeOptions {
+                modbus_unit_id: Some(7),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let attempt = ProbeAttempt {
+            ip: "192.0.2.1".into(),
+            port: 1502,
+            probe: ProbeKind::Modbus,
+        };
+        let temp = TempZgrabConfig::create(&config, &[attempt]).await.unwrap();
+        let context = temp.modbus.unwrap();
+        let ini = tokio::fs::read_to_string(&temp.path).await.unwrap();
+        assert!(ini.contains("[modbus]\nname=\"modbus\"\ntrigger=\"modbus\""));
+        assert!(ini.contains("unit-id=7\n"));
+        assert!(ini.contains(&format!("request-id={}\n", context.request_id)));
+        assert_eq!(context.unit, 7);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn modbus_input_waits_for_engine_and_bounds_rate_and_in_flight() {
+        let (writer, reader) = tokio::io::duplex(1024);
+        let mut reader = BufReader::new(reader);
+        let (ready, started) = oneshot::channel();
+        let permits = Arc::new(Semaphore::new(2));
+        let task = tokio::spawn(write_paced_modbus_input(
+            writer,
+            "first\nsecond\nthird\n".into(),
+            started,
+            permits.clone(),
+            Duration::from_secs(1),
+        ));
+        ready.send(()).unwrap();
+        tokio::task::yield_now().await;
+        let mut line = String::new();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "first\n");
+        line.clear();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "second\n");
+        line.clear();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), reader.read_line(&mut line))
+                .await
+                .is_err()
+        );
+        permits.add_permits(1);
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "third\n");
+        task.await.unwrap().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn modbus_task_uses_external_engine_and_normalizes_its_exception() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("fake-zgrab-modbus-{}", Uuid::now_v7()));
+        std::fs::write(
+            &path,
+            r##"#!/usr/bin/env python3
+import base64, json, sys
+print('started grab at test', file=sys.stderr, flush=True)
+path = sys.argv[sys.argv.index('--config-file') + 1]
+config = open(path, encoding='utf-8').read().splitlines()
+assert '[modbus]' in config
+options = dict(line.split('=', 1) for line in config if '=' in line)
+request_id = int(options['request-id'])
+unit = int(options['unit-id'])
+for line in sys.stdin:
+    ip, _, tag, port = line.strip().split(',')
+    assert tag == 'modbus'
+    if ip.endswith('.2'):
+        print(json.dumps({'ip': ip, 'data': {'modbus': {'status': 'blocklisted-target',
+            'port': int(port)}}}), flush=True)
+        continue
+    raw = request_id.to_bytes(2, 'big') + b'\0\0\0\3' + bytes([unit, 0xab, 2])
+    print(json.dumps({'ip': ip, 'data': {'modbus': {'status': 'application-error',
+        'port': int(port), 'result': {'raw': base64.b64encode(raw).decode()}}}}), flush=True)
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = ServiceDetectionConfig {
+            required_services: vec!["modbus".into()],
+            probe_options: crate::types::ServiceProbeOptions {
+                modbus_unit_id: Some(7),
+                ..Default::default()
+            },
+            zgrab_path: path.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let outcome = run(
+            &config,
+            &[
+                open_port("192.0.2.1", 1502, "tcp"),
+                open_port("192.0.2.2", 1502, "tcp"),
+            ],
+            "ipv4",
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+        let EngineOutcome::Completed(results) = outcome else {
+            panic!("incomplete")
+        };
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].service.as_deref(), Some("modbus"));
+        assert_eq!(results[0].source, "zgrab2");
+        let evidence = &results[0].data.as_ref().unwrap()["evidence"][0]["result"];
+        assert_eq!(evidence["unit_id"], 7);
+        assert_eq!(evidence["exception_code"], 2);
+        assert_eq!(results[1].service, None);
+        assert_eq!(results[1].source, "zgrab2");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn modbus_timeout_preserves_earlier_external_evidence() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("fake-zgrab-timeout-{}", Uuid::now_v7()));
+        std::fs::write(
+            &path,
+            r##"#!/usr/bin/env python3
+import json, sys, time
+path = sys.argv[sys.argv.index('--config-file') + 1]
+config = open(path, encoding='utf-8').read()
+if '[modbus]' in config:
+    print('started grab at test', file=sys.stderr, flush=True)
+    sys.stdin.readline()
+    time.sleep(60)
+else:
+    for line in sys.stdin:
+        ip, _, tag, port = line.strip().split(',')
+        print(json.dumps({'ip': ip, 'data': {tag: {'status': 'success', 'port': int(port),
+            'result': {'banner': 'SSH-2.0-example'}}}}), flush=True)
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = ServiceDetectionConfig {
+            zgrab_path: path.to_string_lossy().into_owned(),
+            idle_timeout_seconds: 5,
+            ..Default::default()
+        };
+        let attempts = [
+            ProbeAttempt {
+                ip: "192.0.2.1".into(),
+                port: 22,
+                probe: ProbeKind::Ssh,
+            },
+            ProbeAttempt {
+                ip: "192.0.2.1".into(),
+                port: 502,
+                probe: ProbeKind::Modbus,
+            },
+        ];
+        let outcome = run_attempts(
+            &config,
+            &attempts,
+            "ipv4",
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+        let ProcessOutcome::TimedOut(evidence, reason) = outcome else {
+            panic!("expected timeout")
+        };
+        assert_eq!(reason, "service_detection_runtime_exceeded");
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].module, "ssh");
+        assert_eq!(evidence[0].status, "success");
     }
 
     #[test]
@@ -1384,7 +1844,7 @@ mod tests {
 
     #[test]
     fn generated_config_routes_http_and_https_separately() {
-        let config = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL);
+        let config = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL, 0);
         assert!(config.contains("name=\"http\""));
         assert!(config.contains("name=\"https\""));
         assert!(config.contains("use-https=true"));
@@ -1393,7 +1853,7 @@ mod tests {
 
     #[test]
     fn generated_config_enables_implicit_tls_application_modules() {
-        let config = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL);
+        let config = zgrab_config(&ServiceDetectionConfig::default(), ProbeKind::ALL, 0);
         assert!(config.contains("[smtp]\nname=\"smtps\""));
         assert!(config.contains("smtps=true"));
         assert!(config.contains("[ftp]\nname=\"ftps\""));

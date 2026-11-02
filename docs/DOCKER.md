@@ -89,6 +89,9 @@ docker compose --env-file docker/.env -f docker/compose.example.yml logs --tail=
 ## Nuclei 与节点验收
 
 镜像内置 masscan、zgrab2、Nuclei 和官方模板，默认无需额外安装或挂载模板。
+镜像的 `/root/.config/zgrab2/blocklist.conf` 使用上游默认列表，其中包含 RFC 1918
+私有地址。Modbus TCP 现在也由 zgrab2 执行，部署方需要按实际授权维护该列表，才能识别
+其中的内网目标；被阻止时扫描器记录 `ModbusTargetsBlocklisted`。详见[服务识别说明](USAGE.md)。
 `NM__NUCLEI__ENABLED=true` 开启漏洞扫描，`NM__NUCLEI__UPDATE_TEMPLATES=true` 允许正常启动时
 联网更新一次；默认 false，只使用镜像内置或已经缓存的模板。
 内置模板位于 `/opt/nuclei-templates/bundled`，首次启用会复制到 scanner-data 中的可写模板目录。

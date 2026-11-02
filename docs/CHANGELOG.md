@@ -2,6 +2,10 @@
 
 [文档中心](README.md) · [配套发布与升级](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)
 
+## 未发布
+
+- Modbus TCP 改用固定版 zgrab2 模块，保留指定 Unit ID、响应关联和合法异常确认；适配器限制批次输入速率及在途数量。Modbus 现遵守 zgrab2 blocklist；镜像默认列表包含 RFC 1918 地址，内网扫描需部署方按授权配置。
+
 ## v0.1.21（2026-10-27 重新发布）
 
 **2026-10-26 的同版本发布已撤回，2026-10-27 修复后重新发布**。请以本次 tag 指向的提交、BUILD-INFO 和 SHA-256 校验文件为准，不复用已撤回制品或旧 Actions 构建附件。本节按最终实现汇总此前阶段记录。
