@@ -627,6 +627,14 @@ fn candidates_for(
     if candidates.iter().any(|c| c.service == "dot") {
         candidates.retain(|c| c.service != "tls");
     }
+    // An endpoint can speak both HTTP and HTTPS. Prefer the confirmed encrypted
+    // web handshake, but leave unrelated equal-strength candidates ambiguous.
+    if candidates
+        .iter()
+        .any(|c| c.service == "https" && c.reason == "protocol_handshake")
+    {
+        candidates.retain(|c| !(c.service == "http" && c.reason == "protocol_handshake"));
+    }
     candidates.sort_by(|left, right| {
         right
             .score
@@ -897,6 +905,120 @@ mod tests {
         assert_eq!(retained.len(), 2);
         assert_eq!(retained[0]["role"], "application_handshake");
         assert_eq!(retained[1]["role"], "transport_security");
+    }
+
+    #[test]
+    fn successful_https_wins_over_http_on_the_same_endpoint() {
+        let config = ServiceDetectionConfig::default();
+        for port in [80, 443, 10443] {
+            for reverse in [false, true] {
+                let mut probes = vec![
+                    evidence("http", port, "success", Some("HTTP/1.1 302 Found")),
+                    evidence("https", port, "success", Some("HTTP/1.1 200 OK")),
+                    evidence("tls", port, "success", None),
+                ];
+                if reverse {
+                    probes.reverse();
+                }
+                let result = &aggregate(&probes, &config)[0];
+                assert_eq!(result.service.as_deref(), Some("https"));
+                assert_eq!(result.data.as_ref().unwrap()["confidence"], 100);
+                assert_eq!(result.data.as_ref().unwrap()["selected_probe"], "https");
+                assert_eq!(result.data.as_ref().unwrap()["attempt_count"], 3);
+                let retained = result.data.as_ref().unwrap()["evidence"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(retained.len(), 2);
+                assert_eq!(retained[0]["module"], "https");
+                assert_eq!(retained[1]["module"], "tls");
+            }
+        }
+    }
+
+    #[test]
+    fn http_and_tls_success_alone_does_not_claim_https() {
+        let config = ServiceDetectionConfig::default();
+        for (probes, expected) in [
+            (
+                vec![
+                    evidence("http", 443, "success", None),
+                    evidence("tls", 443, "success", None),
+                    evidence("https", 443, "protocol-error", None),
+                ],
+                Some("http"),
+            ),
+            (vec![evidence("https", 443, "success", None)], Some("https")),
+            (vec![evidence("tls", 443, "success", None)], Some("tls")),
+        ] {
+            assert_eq!(aggregate(&probes, &config)[0].service.as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn https_preference_respects_the_confidence_threshold() {
+        let config = ServiceDetectionConfig {
+            confidence_threshold: 100,
+            ..ServiceDetectionConfig::default()
+        };
+        let probes = [
+            evidence("http", 443, "success", None),
+            evidence("https", 443, "success", None),
+        ];
+        assert_eq!(
+            aggregate(&probes, &config)[0].service.as_deref(),
+            Some("https")
+        );
+        assert!(
+            aggregate(&[evidence("tls", 443, "success", None)], &config)[0]
+                .service
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn https_preference_preserves_unrelated_conflicts_and_doh_priority() {
+        let config = ServiceDetectionConfig::default();
+        let mut probes = vec![
+            evidence("http", 443, "success", None),
+            evidence("https", 443, "success", None),
+            evidence("modbus", 443, "success", None),
+        ];
+        assert!(aggregate(&probes, &config)[0].service.is_none());
+        probes.pop();
+        probes.push(evidence("doh", 443, "success", None));
+        assert_eq!(
+            aggregate(&probes, &config)[0].service.as_deref(),
+            Some("doh")
+        );
+        probes.push(evidence("mysql", 443, "success", None));
+        assert!(aggregate(&probes, &config)[0].service.is_none());
+    }
+
+    #[test]
+    fn http_https_selection_is_shared_by_fallback_and_aggregation() {
+        let config = ServiceDetectionConfig::default();
+        for port_number in [443, 10443] {
+            let ports = [port(port_number)];
+            let mut completed = initial_attempts(&ports, &config);
+            let mut probes = vec![
+                evidence("http", port_number, "success", None),
+                evidence("https", port_number, "success", None),
+            ];
+            let fallback = fallback_attempts(&ports, &completed, &probes, &config);
+            if port_number == 10443 {
+                assert_eq!(fallback.len(), 1);
+                assert_eq!(fallback[0].probe, ProbeKind::Doh);
+                completed.extend(fallback);
+                probes.push(evidence("doh", port_number, "protocol-error", None));
+            } else {
+                assert!(fallback.is_empty());
+            }
+            assert_eq!(
+                aggregate(&probes, &config)[0].service.as_deref(),
+                Some("https")
+            );
+            assert!(fallback_attempts(&ports, &completed, &probes, &config).is_empty());
+        }
     }
 
     #[test]
