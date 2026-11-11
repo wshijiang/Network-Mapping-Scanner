@@ -43,7 +43,7 @@ Interrupted heartbeat or task response bodies are retried with backoff; a comple
 
 Agent, Worker and module packages must be compatible. Current native service expansion uses IPC 3; legacy IPC 2 and UDP-library-only notes describe historical stages. Follow [module upgrade instructions (Chinese)](https://github.com/wshijiang/Network-Mapping-Scanner/blob/main/docs/MODULE_UPDATES.md) and the [current protocol matrix](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md), including server transport-endpoint migration.
 
-Preserve identity, leases, checkpoints, diagnostics and pending uploads. Stop and replace according to the [recovery guide (Chinese)](https://github.com/wshijiang/Network-Mapping-Scanner/blob/main/docs/recovery.md); do not re-register merely to upgrade. Protocol evidence, authentication rejection and passive observations do not imply successful login, ownership or an open source port.
+Preserve identity, leases, checkpoints, diagnostics and pending uploads. Stop and replace according to the [recovery guide (Chinese)](https://github.com/wshijiang/Network-Mapping-Scanner/blob/main/docs/recovery.md); do not re-register merely to upgrade. Protocol evidence and authentication rejection do not imply successful login, ownership or an open source port.
 
 ## Documentation languages
 

@@ -4,9 +4,9 @@
 
 ## 当前任务与库 API
 
-第一批新增公开 `scanner_rs::udp_probe` 库 API，包含 DNS、NTP、STUN 定向单播探测。该库保持独立；当前另有原生引擎通过 plan v2 将 DNS、EtherNet/IP、BACnet 单播及受限实时流量被动接收接入任务。须配套更新服务端并完成端点投影迁移，详见[服务协议识别与部署](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。NTP/STUN 尚未接入任务，不能据此声明可下发扫描。
+第一批新增公开 `scanner_rs::udp_probe` 库 API，包含 DNS、NTP、STUN 定向单播探测。该库保持独立；当前另有原生引擎通过 plan v2 将 DNS、EtherNet/IP、BACnet 单播接入任务。须配套更新服务端并完成端点投影迁移，详见[服务协议识别与部署](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。NTP/STUN 尚未接入任务，不能据此声明可下发扫描。
 
-UDP 主动任务自动尝试 DNS、EtherNet/IP ListIdentity 和 BACnet/IP（仅 IPv4）；被动任务自动解析支持的 EtherNet/IP I/O 与 OPC UA UADP 帧，无需手动勾选协议。服务端将默认协议集写入 plan，节点能力和预算仍按该集合校验；主动/被动任务保持分离，目标、端口和接收窗口仍需明确配置。
+UDP 任务自动尝试 DNS、EtherNet/IP ListIdentity 和 BACnet/IP（仅 IPv4），无需手动勾选协议。服务端将默认协议集写入 plan，节点能力和预算仍按该集合校验；目标和端口仍需明确配置。早期的 `udp_passive` 被动接收模式（EtherNet/IP I/O、OPC UA UADP）已随服务端模式收敛移除。
 
 ## 协议范围
 
@@ -36,9 +36,9 @@ UDP 主动任务自动尝试 DNS、EtherNet/IP ListIdentity 和 BACnet/IP（仅 
 
 ## 当前任务与后续范围
 
-DNS TCP/UDP、DoH、DoT、VNC 及工业协议的实际范围见[完整支持矩阵](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。DNS/EtherNet/IP/BACnet 主动任务及 EtherNet/IP I/O、OPC UA UADP 的受限被动任务现已接入 plan v2；端点身份增加传输协议，既有部署须先完成配套服务端投影迁移。不能仅修改 TCP 过滤条件来启用 UDP，也不能将独立 NTP/STUN 库 API 当作可下发任务。
+DNS TCP/UDP、DoH、DoT、VNC 及工业协议的实际范围见[完整支持矩阵](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。DNS/EtherNet/IP/BACnet 主动任务现已接入 plan v2；端点身份增加传输协议，既有部署须先完成配套服务端投影迁移。不能仅修改 TCP 过滤条件来启用 UDP，也不能将独立 NTP/STUN 库 API 当作可下发任务。
 
-[DNS 扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md)与[工业协议计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md)保留分批设计历史，当前能力以支持矩阵和任务文档为准。被动接收不向 UDP/2222 I/O 端口发送探测，不证明端口开放或会话有效。
+[DNS 扩展计划](https://github.com/wshijiang/network-mapping/blob/main/docs/DNS_DOH_DOT_VNC_PLAN.md)与[工业协议计划](https://github.com/wshijiang/network-mapping/blob/main/docs/INDUSTRIAL_SERVICE_DETECTION_PLAN.md)保留分批设计历史，当前能力以支持矩阵和任务文档为准。
 
 尚待后续交付的范围包括 NTP/STUN 任务接入、Elasticsearch 原生明文/TLS Transport，以及 SNMP、NBNS、RPCbind、TFTP、SQL Browser、Memcached、SIP、CoAP、QUIC/DTLS 等专项协议；不计为本次发布支持。
 

@@ -397,10 +397,6 @@ pub(crate) struct ServiceProbeOptions {
     pub(crate) server_name: Option<String>,
     pub(crate) doh_path: Option<String>,
     pub(crate) tls_ca_pem: Option<String>,
-    pub(crate) passive_bind: Option<String>,
-    pub(crate) passive_group: Option<String>,
-    pub(crate) passive_interface: Option<String>,
-    pub(crate) passive_window_seconds: Option<u16>,
 }
 impl ServiceProbeOptions {
     pub(crate) fn validate(&self) -> Result<(), String> {

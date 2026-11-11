@@ -52,7 +52,7 @@ pub(crate) async fn run_scan(
         service_detection: &service_detection,
         ..config
     };
-    let mut ports = if matches!(plan.profile.as_str(), "udp_inventory" | "udp_passive") {
+    let mut ports = if plan.profile == "udp_inventory" {
         super::engines::udp::targets(target)?
     } else {
         Vec::new()
