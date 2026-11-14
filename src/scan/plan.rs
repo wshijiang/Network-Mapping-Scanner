@@ -60,7 +60,7 @@ impl ScanCapabilities {
         let mut profiles = vec!["legacy", "port_only"];
         let mut stages = vec!["port_discovery"];
         if service.enabled {
-            profiles.extend(["service_inventory", "udp_inventory", "udp_passive"]);
+            profiles.extend(["service_inventory", "udp_inventory"]);
             stages.push("service_detection");
         }
         if dns.enabled {
@@ -83,21 +83,8 @@ impl ScanCapabilities {
             },
             service_protocols: if service.enabled {
                 vec![
-                    "dns",
-                    "vnc",
-                    "dot",
-                    "doh",
-                    "modbus",
-                    "enip",
-                    "s7",
-                    "opcua",
-                    "mqtt",
-                    "mqtts",
-                    "dns_udp",
-                    "enip_udp",
-                    "bacnet",
-                    "opcua_pubsub",
-                    "enip_io",
+                    "dns", "vnc", "dot", "doh", "modbus", "enip", "s7", "opcua", "mqtt", "mqtts",
+                    "dns_udp", "enip_udp", "bacnet",
                 ]
             } else {
                 vec![]
@@ -131,38 +118,6 @@ impl ScanPlan {
         self.service_probe_options
             .validate()
             .map_err(ScannerError::Scan)?;
-        if self.profile == "udp_passive" {
-            super::engines::passive::validate_options(&self.service_probe_options)?;
-            if self.version != 2
-                || self.stages.len() != 1
-                || self.stages[0].kind != ScanStageKind::ServiceDetection
-                || !self.stages[0].required
-                || self.required_services.is_empty()
-                || self.required_services.len() > 2
-                || self
-                    .required_services
-                    .iter()
-                    .collect::<std::collections::HashSet<_>>()
-                    .len()
-                    != self.required_services.len()
-                || self
-                    .required_services
-                    .iter()
-                    .any(|s| !matches!(s.as_str(), "opcua_pubsub" | "enip_io"))
-            {
-                return Err(ScannerError::Scan("invalid UDP passive plan".into()));
-            }
-            return Ok(());
-        }
-        if self.service_probe_options.passive_bind.is_some()
-            || self.service_probe_options.passive_group.is_some()
-            || self.service_probe_options.passive_interface.is_some()
-            || self.service_probe_options.passive_window_seconds.is_some()
-        {
-            return Err(ScannerError::Scan(
-                "passive options require udp_passive profile".into(),
-            ));
-        }
         if self.profile == "udp_inventory" {
             if self.version != 2
                 || self.stages.len() != 1

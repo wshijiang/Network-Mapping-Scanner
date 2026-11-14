@@ -182,13 +182,6 @@ pub(crate) async fn run(
     cancel: &AtomicBool,
     mut journal: Option<&mut crate::journal::ScanJournal<'_>>,
 ) -> Result<EngineOutcome, ScannerError> {
-    if config
-        .required_services
-        .iter()
-        .any(|s| matches!(s.as_str(), "opcua_pubsub" | "enip_io"))
-    {
-        return super::passive::run(config, ports, cancel, journal).await;
-    }
     if ports.iter().any(|p| p.protocol != "udp")
         || config.required_services.is_empty()
         || config

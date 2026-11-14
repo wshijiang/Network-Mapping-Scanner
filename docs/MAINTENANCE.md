@@ -125,6 +125,12 @@ pub(crate) async fn run_scan(
 `service_inventory` 与 `service_detection`。启用并验证 Nuclei 二进制及模板目录后才声明
 `vulnerability_scan` 与 `vulnerability_detection`，供服务端能力调度使用。
 
+能力按**有效配置**上报：引擎开关取本地配置与服务端下发的扫描配置的交集，服务端配置
+只能收紧、不能放宽本地开关。服务端在扫描配置中禁用某引擎后，下一次心跳即不再声明对应
+能力，且服务端调度会立即按该配置过滤任务，无需等待心跳。若任务仍到达本节点（例如配置
+发布与领取之间的竞态），必需阶段引擎被禁用时任务会在启动任何引擎前以路由失败
+（`route_unavailable`）上报，由服务端改派其他节点，而不是按普通扫描错误原地重试。
+
 masscan 通过本地 `scanner.masscan_output_mode` 选择输出契约：
 
 - `compatible`（默认）保留旧启动参数，接受标准 list、官方控制台的

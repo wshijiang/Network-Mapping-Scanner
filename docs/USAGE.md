@@ -58,9 +58,9 @@ Modbus 改由 zgrab2 执行后会遵守其 blocklist；旧版原生 Modbus 不�
 
 TCP 默认省略或留空 `scan_plan.required_services`，使用完整自动识别策略；旧 API 的非空列表仍可限制探测范围。`service_probe_options` 无需选择协议即可提供 TLS 服务名、DoH 单一路径、额外公开 CA、Modbus Unit ID、S7 TSAP 和 MQTT 版本。TLS 默认验证证书并固定连接目标 IP，不重定向或绕过验证。非标准端口可能受节点探测预算和超时限制，自动识别不保证每次执行都尝试所有协议；HTTPS 成功后会在剩余预算内细分 DoH，合法 RFB 问候也可直接确认非标准端口的 VNC。
 
-UDP 使用 plan v2 的 `udp_inventory`（DNS、EtherNet/IP UDP/44818、经典 BACnet/IP 单播）与 `udp_passive`（EtherNet/IP I/O、UADP 有限标量 keyframe 被动接收），无需 masscan 命中。无有效响应/报文不判定开放或关闭。当前每任务仅一种传输，不支持 UDP 域名后续任务。
+UDP 使用 plan v2 的 `udp_inventory`（DNS、EtherNet/IP UDP/44818、经典 BACnet/IP 单播），无需 masscan 命中。无有效响应不判定开放或关闭。当前每任务仅一种传输，不支持 UDP 域名后续任务。旧版本的 `udp_passive` 被动接收模式已移除，节点不再声明 `opcua_pubsub` / `enip_io` 协议能力。
 
-节点声明协议能力及 `max_service_probes`；所选协议数不得超过节点预算。原生引擎共用累计期限、取消、限速及 ACK 检查点；UDP 限制最多 256 个地址、主动最多 32 个端口，被动单一接收端口/明确本机 IPv4 接口/1–60 秒窗口。被动结果归属实际发送源，不能证明端口可达，不保留过程数据。
+节点声明协议能力及 `max_service_probes`；所选协议数不得超过节点预算。原生引擎共用累计期限、取消、限速及 ACK 检查点；UDP 限制最多 256 个地址、最多 32 个明确端口。
 
 完整支持矩阵、任务示例、参数边界和配套服务端投影迁移见[服务协议识别与部署](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md)。Worker 必须配套 [IPC 3 模块包](MODULE_UPDATES.md)。
 

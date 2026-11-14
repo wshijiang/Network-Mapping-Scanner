@@ -288,7 +288,6 @@ pub(crate) struct HeartbeatClient {
     maintenance_url: String,
     scanner_id: Uuid,
     network_capabilities: SharedNetworkCapabilities,
-    scan_capabilities: ScanCapabilities,
     pending_latency: Arc<RwLock<Option<LatencyReport>>>,
     runtime_configuration_url: String,
     runtime_configuration: RuntimeConfiguration,
@@ -331,7 +330,6 @@ impl HeartbeatClient {
         endpoints: HeartbeatEndpoints,
         scanner_id: Uuid,
         network_capabilities: SharedNetworkCapabilities,
-        scan_capabilities: ScanCapabilities,
         runtime_configuration_url: String,
         runtime_configuration: RuntimeConfiguration,
     ) -> Self {
@@ -346,7 +344,6 @@ impl HeartbeatClient {
             maintenance_url: endpoints.maintenance,
             scanner_id,
             network_capabilities,
-            scan_capabilities,
             pending_latency: Arc::new(RwLock::new(None)),
             runtime_configuration_url,
             runtime_configuration,
@@ -395,19 +392,23 @@ impl HeartbeatClient {
         } else {
             "idle"
         };
-        let scan_capabilities = if let Some(registry) = &self.modules {
-            let mut runtime = self.runtime_configuration.snapshot().await;
-            if let Ok(Some(environment)) = registry.active() {
-                runtime.service_detection.enabled &=
-                    environment.modules.contains_key("service_detection");
-                runtime.dns.enabled &= environment.modules.contains_key("dns_lookup");
-                runtime.nuclei.enabled &=
-                    environment.modules.contains_key("vulnerability_detection");
-            }
-            ScanCapabilities::from_config(&runtime.service_detection, &runtime.dns, &runtime.nuclei)
-        } else {
-            self.scan_capabilities.clone()
-        };
+        // Capabilities must reflect the effective configuration (local AND
+        // server-published), otherwise the server keeps routing tasks whose
+        // required engines this scanner will refuse to run.
+        let mut runtime = self.runtime_configuration.snapshot().await;
+        if let Some(registry) = &self.modules
+            && let Ok(Some(environment)) = registry.active()
+        {
+            runtime.service_detection.enabled &=
+                environment.modules.contains_key("service_detection");
+            runtime.dns.enabled &= environment.modules.contains_key("dns_lookup");
+            runtime.nuclei.enabled &= environment.modules.contains_key("vulnerability_detection");
+        }
+        let scan_capabilities = ScanCapabilities::from_config(
+            &runtime.service_detection,
+            &runtime.dns,
+            &runtime.nuclei,
+        );
         let payload = HeartbeatPayload {
             local_config_check: self.local_config_check.clone(),
             module_state: self.modules.as_ref().map(|registry| {

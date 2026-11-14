@@ -41,7 +41,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [配置与使用](USAGE.md) | 扫描模式、引擎配置、远程参数、重连和双栈探测 |
-| [UDP 服务识别与独立内核](UDP_DETECTION.md) | 已接入 plan v2 的主动/被动任务；NTP/STUN 仍仅为库 API |
+| [UDP 服务识别与独立内核](UDP_DETECTION.md) | 已接入 plan v2 的主动任务；NTP/STUN 仍仅为库 API |
 | [masscan 适配与迁移](MASSCAN.md) | 官方 list 输出、兼容模式、切换验证和回滚 |
 | [Nuclei 部署与运维](NUCLEI.md) | 模板治理、参数语义、结果协议和上线检查 |
 | [目标执行反馈](PERFORMANCE.md) | 连接采样、失败分类与兼容升级 |

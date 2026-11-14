@@ -12,5 +12,3 @@ pub(crate) mod industrial;
 mod modbus;
 
 pub(crate) mod udp;
-
-pub(crate) mod passive;
