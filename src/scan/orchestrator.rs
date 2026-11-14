@@ -45,6 +45,24 @@ pub(crate) async fn run_scan(
             "required service probes exceed endpoint budget".into(),
         ));
     }
+    // Reject capability mismatches before any engine starts: running port
+    // discovery first only wastes time on a task this scanner cannot finish.
+    // The conditions mirror the per-stage gates below.
+    for stage in &plan.stages {
+        let disabled = match stage.kind {
+            ScanStageKind::ServiceDetection => {
+                !config.service_detection.enabled && plan.profile != "legacy" && stage.required
+            }
+            ScanStageKind::DnsLookup => !config.dns.enabled,
+            ScanStageKind::VulnerabilityDetection => !config.nuclei.enabled,
+            ScanStageKind::PortDiscovery => false,
+        };
+        if disabled {
+            return Err(ScannerError::CapabilityDisabled {
+                stage: stage.kind.name(),
+            });
+        }
+    }
     let mut service_detection = config.service_detection.clone();
     service_detection.required_services = plan.required_services.clone();
     service_detection.probe_options = plan.service_probe_options.clone();
@@ -125,9 +143,9 @@ pub(crate) async fn run_scan(
                     );
                     continue;
                 }
-                return Err(ScannerError::Scan(
-                    "task requires service_detection but this scanner has it disabled".into(),
-                ));
+                return Err(ScannerError::CapabilityDisabled {
+                    stage: "service_detection",
+                });
             }
             ScanStageKind::ServiceDetection => {
                 let required = if plan.profile == "legacy" {
@@ -170,9 +188,9 @@ pub(crate) async fn run_scan(
                 }
             }
             ScanStageKind::DnsLookup if !config.dns.enabled => {
-                return Err(ScannerError::Scan(
-                    "task requires dns_lookup but this scanner has DNS disabled".into(),
-                ));
+                return Err(ScannerError::CapabilityDisabled {
+                    stage: "dns_lookup",
+                });
             }
             ScanStageKind::DnsLookup => {
                 match run_dns(&mut config, target, cancel_requested)
@@ -188,10 +206,9 @@ pub(crate) async fn run_scan(
                 }
             }
             ScanStageKind::VulnerabilityDetection if !config.nuclei.enabled => {
-                return Err(ScannerError::Scan(
-                    "task requires vulnerability_detection but this scanner has nuclei disabled"
-                        .into(),
-                ));
+                return Err(ScannerError::CapabilityDisabled {
+                    stage: "vulnerability_detection",
+                });
             }
             ScanStageKind::VulnerabilityDetection => {
                 match run_vulnerabilities(&mut config, &ports, &services, target, cancel_requested)
@@ -865,6 +882,70 @@ done
         };
         assert_eq!(port.port, 443);
         assert_eq!(port.observed_at, 1000);
+    }
+
+    #[tokio::test]
+    async fn disabled_required_engine_fails_before_any_engine_starts() {
+        let target = TargetParams {
+            ip: "192.0.2.1".into(),
+            port: "443".into(),
+            rate: 100,
+            address_family: "ipv4".into(),
+        };
+        let plan = ScanPlan {
+            service_probe_options: Default::default(),
+            required_services: Vec::new(),
+            version: SCAN_PLAN_VERSION,
+            profile: "vulnerability_scan".into(),
+            stages: vec![
+                ScanStageSpec {
+                    kind: ScanStageKind::PortDiscovery,
+                    required: true,
+                },
+                ScanStageSpec {
+                    kind: ScanStageKind::ServiceDetection,
+                    required: false,
+                },
+                ScanStageSpec {
+                    kind: ScanStageKind::VulnerabilityDetection,
+                    required: true,
+                },
+            ],
+        };
+        let nuclei = NucleiConfig::default();
+        assert!(!nuclei.enabled);
+        let error = match run_scan(
+            ScanRuntimeConfig {
+                environment: None,
+                modules_config: None,
+                registry: None,
+                journal: None,
+                // Must never be invoked: the preflight rejects the plan first.
+                scanner_path: "/definitely/not/invoked",
+                masscan: &MasscanConfig::default(),
+                service_detection: &ServiceDetectionConfig::default(),
+                dns: &DnsConfig::default(),
+                nuclei: &nuclei,
+                dns_resolvers: &[],
+                ipv4_ready: true,
+                ipv6_ready: false,
+            },
+            &plan,
+            &target,
+            &AtomicBool::new(false),
+        )
+        .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("disabled nuclei must reject the vulnerability plan"),
+        };
+        assert!(matches!(
+            error,
+            ScannerError::CapabilityDisabled {
+                stage: "vulnerability_detection"
+            }
+        ));
+        assert!(error.is_route_failure());
     }
 
     #[tokio::test]

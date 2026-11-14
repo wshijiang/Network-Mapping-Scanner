@@ -36,9 +36,8 @@ use crate::network::{NetworkDetector, SharedNetworkCapabilities};
 use crate::reconnect::{Backoff, ConnectionState, RetryPolicy};
 use crate::runtime_config::{RuntimeConfiguration, RuntimeConfigurationEnvelope};
 use crate::scan::{
-    ScanCapabilities, ScanObservation, ScanOutcome, ScanPlan, ScanRuntimeConfig, run_scan,
-    validate_nuclei_binary, validate_nuclei_templates, validate_scanner_binary,
-    validate_zgrab_binary,
+    ScanObservation, ScanOutcome, ScanPlan, ScanRuntimeConfig, run_scan, validate_nuclei_binary,
+    validate_nuclei_templates, validate_scanner_binary, validate_zgrab_binary,
 };
 use crate::storage::{StateStore, StoredIdentity};
 use crate::sysinfo::SystemInfo;
@@ -525,8 +524,6 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
         cfg.scanner.runtime_token.clone(),
     )?;
     let network_capabilities = SharedNetworkCapabilities::new(network_detector.detect().await);
-    let scan_capabilities =
-        ScanCapabilities::from_config(&cfg.service_detection, &cfg.dns, &cfg.nuclei);
     let runtime_configuration = RuntimeConfiguration::new(cfg);
     if let Some(stored) = state_store.load_runtime_configuration(&server_origin)? {
         let envelope = RuntimeConfigurationEnvelope {
@@ -608,7 +605,6 @@ async fn run(cli: Cli, logging_guard: &crate::logging::LoggingGuard) -> Result<(
         },
         scanner_id,
         network_capabilities,
-        scan_capabilities,
         cfg.scanner.runtime_configuration_url(),
         runtime_configuration.clone(),
     )
@@ -2347,13 +2343,15 @@ async fn scan_loop(
                     break;
                 }
                 let diagnostics = e.scan_diagnostics();
+                let route_failure = e.is_route_failure();
                 tracing::error!(
                     event = "ScanTaskFailed",
                     operation = "execute_scan_plan",
                     error_kind = diagnostics.error_kind,
                     error_code = diagnostics.error_code,
                     error_message = %e,
-                    retryable = false,
+                    retryable = true,
+                    failure_class = if route_failure { "route_unavailable" } else { "scan_error" },
                     outcome = "task_failed",
                     engine = ?diagnostics.engine,
                     stage = ?diagnostics.stage,
@@ -2375,7 +2373,7 @@ async fn scan_loop(
                     heartbeat_client,
                     active_task,
                     assigned_task.task_id,
-                    if e.is_route_failure() {
+                    if route_failure {
                         TaskReport::RouteFailure(&error_message)
                     } else {
                         TaskReport::Failure(&error_message)

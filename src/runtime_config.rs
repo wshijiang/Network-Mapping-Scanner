@@ -396,4 +396,48 @@ mod tests {
         assert!(!snapshot.nuclei.enabled);
         assert_eq!(snapshot.rate, local.scanner.rate as i32);
     }
+
+    #[tokio::test]
+    async fn remote_disable_withdraws_advertised_capabilities() {
+        let mut local: AppConfig = toml_edit::de::from_str(include_str!("../config.toml")).unwrap();
+        local.nuclei.enabled = true;
+        let manager = RuntimeConfiguration::new(&local);
+        let snapshot = manager.snapshot().await;
+        let local_capabilities = crate::scan::ScanCapabilities::from_config(
+            &snapshot.service_detection,
+            &snapshot.dns,
+            &snapshot.nuclei,
+        );
+        assert!(local_capabilities.profiles.contains(&"vulnerability_scan"));
+        let document: RemoteRuntimeConfiguration = serde_json::from_value(serde_json::json!({
+            "masscan": {"rate": 1000},
+            "service_detection": {"enabled": true, "strategy": "adaptive", "max_probes_per_endpoint": 8, "confidence_threshold": 80, "senders": 20, "server_rate_limit": 10, "connect_timeout_seconds": 5, "target_timeout_seconds": 15, "max_result_bytes": 65536},
+            "dns": {"enabled": true, "record_types": ["A", "AAAA"], "query_timeout_seconds": 5},
+            "nuclei": {"enabled": false, "port_fallback": true, "severities": ["high"], "rate_limit": 10, "bulk_size": 5, "concurrency": 5, "timeout_seconds": 10, "retries": 1, "max_runtime_seconds": 60, "max_findings": 100, "max_result_bytes": 65536}
+        })).unwrap();
+        manager
+            .restore(RuntimeConfigurationEnvelope {
+                revision: 1,
+                schema_version: 1,
+                document,
+            })
+            .await
+            .unwrap();
+        let snapshot = manager.snapshot().await;
+        let effective_capabilities = crate::scan::ScanCapabilities::from_config(
+            &snapshot.service_detection,
+            &snapshot.dns,
+            &snapshot.nuclei,
+        );
+        assert!(
+            !effective_capabilities
+                .profiles
+                .contains(&"vulnerability_scan")
+        );
+        assert!(
+            !effective_capabilities
+                .stages
+                .contains(&"vulnerability_detection")
+        );
+    }
 }

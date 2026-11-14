@@ -296,6 +296,12 @@ pub(crate) enum ScannerError {
     #[error("{0}")]
     Scan(String),
 
+    /// A required plan stage needs an engine that the effective configuration
+    /// (local AND server-published) disables. This is a routing problem, not a
+    /// scan defect: the task belongs on another scanner.
+    #[error("task requires {stage} but this scanner has it disabled")]
+    CapabilityDisabled { stage: &'static str },
+
     #[error("{engine} {stage} failed: {detail}")]
     ExternalProcess {
         engine: &'static str,
@@ -327,6 +333,7 @@ pub(crate) enum ScannerError {
 impl ScannerError {
     pub(crate) fn is_route_failure(&self) -> bool {
         match self {
+            Self::CapabilityDisabled { .. } => true,
             Self::Io(error) => matches!(
                 error.kind(),
                 std::io::ErrorKind::AddrNotAvailable
@@ -439,6 +446,19 @@ impl ScannerError {
                     }
                 }
             }
+            Self::CapabilityDisabled { stage } => ScanFailureDiagnostics {
+                error_kind: "configuration",
+                error_code: "scanner_engine_disabled",
+                engine: None,
+                stage: Some(stage),
+                process_id: None,
+                exit_code: None,
+                elapsed_ms: None,
+                result_count: None,
+                invalid_line_count: None,
+                stderr_bytes: None,
+                stderr_truncated: None,
+            },
             _ => ScanFailureDiagnostics {
                 error_kind: "scan",
                 error_code: "scan_plan_failed",
@@ -520,6 +540,22 @@ mod tests {
         assert_eq!(diagnostics.error_kind, "scan_engine");
         assert_eq!(diagnostics.error_code, "vulnerability_detection_failed");
         assert_eq!(diagnostics.engine, Some("nuclei"));
+        assert_eq!(diagnostics.stage, Some("vulnerability_detection"));
+    }
+
+    #[test]
+    fn capability_mismatch_is_a_route_failure_with_configuration_diagnostics() {
+        let error = ScannerError::CapabilityDisabled {
+            stage: "vulnerability_detection",
+        };
+        assert!(error.is_route_failure());
+        assert_eq!(
+            error.to_string(),
+            "task requires vulnerability_detection but this scanner has it disabled"
+        );
+        let diagnostics = error.scan_diagnostics();
+        assert_eq!(diagnostics.error_kind, "configuration");
+        assert_eq!(diagnostics.error_code, "scanner_engine_disabled");
         assert_eq!(diagnostics.stage, Some("vulnerability_detection"));
     }
 
