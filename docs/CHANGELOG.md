@@ -2,7 +2,7 @@
 
 [文档中心](README.md) · [配套发布与升级](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)
 
-## 未发布
+## v0.1.22（2026-11-18）
 
 - 心跳能力改按有效配置上报：引擎开关取本地配置与服务端下发扫描配置的交集，服务端禁用某引擎后下一次心跳即收回对应 profile/阶段声明，与服务端调度门控保持一致。
 - 必需阶段的引擎被有效配置禁用时，任务在启动任何引擎前即以路由失败（`route_unavailable`）上报，由服务端改派其他节点；不再先跑完端口扫描再以普通扫描错误原地重试三次。失败日志同步输出真实的 retryable 与 failure_class。
