@@ -10,7 +10,7 @@ This is the English entry point for the scanner component. The first translated 
 
 ## Release preparation
 
-This component is releasing **0.1.21**, paired with server **0.1.30**, scanner **0.1.21**, and web console **0.1.24**. The 2026-10-26 release was withdrawn and is being replaced on 2026-10-27 after fixes. Use the current tag commit, BUILD-INFO and SHA-256 files; do not reuse withdrawn artifacts. Existing installations must complete the transport endpoint migration before enabling new UDP tasks. Upgrade the Agent, Worker and complete module bundle together to IPC **3**, retaining node identity and pending results. See the [release and upgrade procedure (Chinese)](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md) and the change log above for scope, rollback and tag checks after merging.
+This component is preparing **0.1.22**, paired with server **0.1.31**, scanner **0.1.22**, and web console **0.1.25**. Release PRs remain open for review; version tags have not been pushed. The paired server upgrades from 0.1.30 with idempotent incremental migrations and no ES projection rebuild; older installations must complete the transport endpoint migration first. Upgrade the Agent, Worker and complete module bundle together to IPC **3**, retaining node identity and pending results. See the [release and upgrade procedure (Chinese)](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md) and the change log above for scope, rollback and tag checks after merging.
 
 ## Service detection engine upgrade
 

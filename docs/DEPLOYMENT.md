@@ -6,9 +6,9 @@
 
 [部署方式](#部署方式) · [准备网络与工具](#准备网络与工具) · [原生安装](#原生安装) · [配置](#配置) · [注册与首次运行](#注册与首次运行) · [systemd 托管](#systemd-托管) · [升级与恢复](#升级与恢复) · [验收与排障](#验收与排障)
 
-## 0.1.21 配套升级
+## 0.1.22 配套升级
 
-先完成服务端 0.1.30 的传输端点迁移，配套控制台 0.1.24；暂停分配并排空旧 generation 任务和检查点后，一起替换 Agent、Worker 与完整 IPC 3 模块包。保留节点身份、SQLite 和待上传结果，不通过清空状态重新注册完成普通升级。见[配套发布与回滚次序](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)及[模块升级](MODULE_UPDATES.md)。
+配套服务端 0.1.31、控制台 0.1.25；服务端自 0.1.30 升级为幂等增量迁移，无需重建 ES 索引（更旧版本须先完成传输端点迁移）。暂停分配并排空旧 generation 任务和检查点后，一起替换 Agent、Worker 与完整 IPC 3 模块包。保留节点身份、SQLite 和待上传结果，不通过清空状态重新注册完成普通升级。见[配套发布与回滚次序](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)及[模块升级](MODULE_UPDATES.md)。
 
 ## 部署方式
 
