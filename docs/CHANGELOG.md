@@ -2,6 +2,15 @@
 
 [文档中心](README.md) · [配套发布与升级](https://github.com/wshijiang/network-mapping/blob/main/docs/RELEASING.md)
 
+## 未发布
+
+- **网页内容富化（favicon / JS / 落地页）**：服务识别出 http/https 端点后，新增并发、异步、 best-effort 的网页资产抓取阶段，结果作为 `web_assets` 证据随既有上传链路入库，供服务端 `icon_md5` / `js_name` / `js_md5` 检索与图标展示：
+  - favicon：按 `<link rel=icon>` 候选（rel 优先级排序）抓取，兜底 `/favicon.ico`；魔数校验拒收 200-HTML 错误页；原始字节上限默认 **64KB**，base64 上传，MD5 由服务端投影时计算（与 Hunter `web.icon` / Quake `favicon.hash` 一致）。
+  - 外部 JS：提取同源 `<script src>`（跳过内联 / `data:` / 跨域），默认每页最多 **10** 个，逐个下载计算 **MD5**（只存哈希与路径，不存内容），单文件上限 512KB。
+  - 落地页：仅当原探测为 3xx 或空 body 时条件性重抓 `/`，body 上限 256KB；重定向手动跟随且**钉死目标 IP 与端口**（自定义 DNS resolver + Location 缺省端口回填），跨主机名重定向不会把证据记到第三方服务器。
+  - 严格有界：全局并发信号量（默认 16）、单请求超时（默认 10s）、块级总预算（默认 120s）、结果字节预算（沿用 64MB 块上限）；取消/超时保留已完成部分，富化失败绝不升级为扫描失败。
+  - 配置：`[service_detection.web_content]`（enabled 默认 true、concurrency、fetch_timeout_seconds、max_redirects、max_stage_seconds、max_favicon_bytes、max_js_files、max_js_bytes、max_body_bytes、user_agent），服务端运行时配置可覆盖全部数值，有效开关为本地 AND 远端；任务级 `scan_plan.web_content.enabled` 可单任务关闭。旧服务端/旧计划无该字段时按本地默认运行，协议与 plan 版本不变。
+
 ## v0.1.22（2026-11-18）
 
 - 心跳能力改按有效配置上报：引擎开关取本地配置与服务端下发扫描配置的交集，服务端禁用某引擎后下一次心跳即收回对应 profile/阶段声明，与服务端调度门控保持一致。

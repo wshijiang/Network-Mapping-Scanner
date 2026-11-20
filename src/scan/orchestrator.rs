@@ -66,6 +66,12 @@ pub(crate) async fn run_scan(
     let mut service_detection = config.service_detection.clone();
     service_detection.required_services = plan.required_services.clone();
     service_detection.probe_options = plan.service_probe_options.clone();
+    if let Some(enabled) = plan
+        .web_content
+        .and_then(|override_cfg| override_cfg.enabled)
+    {
+        service_detection.web_content.enabled = enabled;
+    }
     let mut config = ScanRuntimeConfig {
         service_detection: &service_detection,
         ..config
@@ -840,6 +846,7 @@ done
         let plan = ScanPlan {
             service_probe_options: Default::default(),
             required_services: Vec::new(),
+            web_content: None,
             version: SCAN_PLAN_VERSION,
             profile: "port_only".into(),
             stages: vec![ScanStageSpec {
@@ -895,6 +902,7 @@ done
         let plan = ScanPlan {
             service_probe_options: Default::default(),
             required_services: Vec::new(),
+            web_content: None,
             version: SCAN_PLAN_VERSION,
             profile: "vulnerability_scan".into(),
             stages: vec![
@@ -965,6 +973,7 @@ done
         let plan = ScanPlan {
             service_probe_options: Default::default(),
             required_services: Vec::new(),
+            web_content: None,
             version: SCAN_PLAN_VERSION,
             profile: "dns_ports".into(),
             stages: vec![

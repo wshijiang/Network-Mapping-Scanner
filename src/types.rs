@@ -461,6 +461,83 @@ pub(crate) struct ServiceDetectionConfig {
     pub(crate) connect_timeout_seconds: u64,
     pub(crate) target_timeout_seconds: u64,
     pub(crate) max_result_bytes: usize,
+    /// Optional concurrent web asset enrichment (favicon / external JS / landing
+    /// body) for identified http/https endpoints. Enabled by default; failures
+    /// degrade to the base probe evidence and never fail the scan.
+    pub(crate) web_content: WebContentConfig,
+}
+
+/// Bounds for the best-effort web content enrichment pass. Every value is
+/// server-tunable through the scanner runtime configuration and the local
+/// config.toml; defaults keep the pass cheap and strictly bounded.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub(crate) struct WebContentConfig {
+    pub(crate) enabled: bool,
+    /// Global in-flight fetch limit shared by favicon and JS requests.
+    pub(crate) concurrency: usize,
+    pub(crate) fetch_timeout_seconds: u64,
+    pub(crate) max_redirects: usize,
+    /// Total enrichment budget per service-detection block.
+    pub(crate) max_stage_seconds: u64,
+    /// Raw favicon byte cap (stored base64-encoded, ~4/3 expansion).
+    pub(crate) max_favicon_bytes: usize,
+    pub(crate) max_js_files: usize,
+    pub(crate) max_js_bytes: usize,
+    pub(crate) max_body_bytes: usize,
+    pub(crate) user_agent: Option<String>,
+}
+
+impl Default for WebContentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            concurrency: 16,
+            fetch_timeout_seconds: 10,
+            max_redirects: 3,
+            max_stage_seconds: 120,
+            max_favicon_bytes: 65_536,
+            max_js_files: 10,
+            max_js_bytes: 524_288,
+            max_body_bytes: 262_144,
+            user_agent: None,
+        }
+    }
+}
+
+impl WebContentConfig {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !(1..=256).contains(&self.concurrency) {
+            return Err("web_content.concurrency must be between 1 and 256".into());
+        }
+        if !(1..=120).contains(&self.fetch_timeout_seconds) {
+            return Err("web_content.fetch_timeout_seconds must be between 1 and 120".into());
+        }
+        if self.max_redirects > 10 {
+            return Err("web_content.max_redirects must be at most 10".into());
+        }
+        if !(1..=3600).contains(&self.max_stage_seconds) {
+            return Err("web_content.max_stage_seconds must be between 1 and 3600".into());
+        }
+        if !(1_024..=1_048_576).contains(&self.max_favicon_bytes) {
+            return Err("web_content.max_favicon_bytes must be between 1024 and 1048576".into());
+        }
+        if self.max_js_files > 64 {
+            return Err("web_content.max_js_files must be at most 64".into());
+        }
+        if !(1_024..=4_194_304).contains(&self.max_js_bytes) {
+            return Err("web_content.max_js_bytes must be between 1024 and 4194304".into());
+        }
+        if !(1_024..=1_048_576).contains(&self.max_body_bytes) {
+            return Err("web_content.max_body_bytes must be between 1024 and 1048576".into());
+        }
+        if self.user_agent.as_ref().is_some_and(|value| {
+            value.is_empty() || value.len() > 256 || value.bytes().any(|b| b.is_ascii_control())
+        }) {
+            return Err("invalid web_content.user_agent".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -501,6 +578,7 @@ impl Default for ServiceDetectionConfig {
             connect_timeout_seconds: 5,
             target_timeout_seconds: 15,
             max_result_bytes: 65_536,
+            web_content: WebContentConfig::default(),
         }
     }
 }

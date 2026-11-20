@@ -53,5 +53,14 @@ service_detection.senders
 service_detection.server_rate_limit
 service_detection.strategy
 service_detection.target_timeout_seconds
+service_detection.web_content.concurrency
+service_detection.web_content.enabled
+service_detection.web_content.fetch_timeout_seconds
+service_detection.web_content.max_body_bytes
+service_detection.web_content.max_favicon_bytes
+service_detection.web_content.max_js_bytes
+service_detection.web_content.max_js_files
+service_detection.web_content.max_redirects
+service_detection.web_content.max_stage_seconds
 service_detection.zgrab_path
 upload.endpoint

@@ -235,11 +235,26 @@ pub(crate) async fn run_with_journal(
             service_bytes += bytes;
             retained.push(service);
         }
-        let block = retained;
+        let mut block = retained;
         if let Some(reason) = timeout_reason {
             save_elapsed(&mut journal, previous_elapsed, started)?;
             services.extend(block);
             return Ok(EngineOutcome::Partial(services, reason.into()));
+        }
+        // Best-effort web asset enrichment before the block is journaled, so
+        // recovery never re-fetches and uploaded evidence already carries it.
+        let added_bytes = super::web_content::enrich_block(
+            config,
+            &mut block,
+            deadline,
+            cancel_requested,
+            (64usize * 1024 * 1024).saturating_sub(service_bytes),
+        )
+        .await;
+        service_bytes = service_bytes.saturating_add(added_bytes);
+        if cancel_requested.load(Ordering::Relaxed) {
+            save_elapsed(&mut journal, previous_elapsed, started)?;
+            return Ok(EngineOutcome::Cancelled);
         }
         if let Some(j) = journal.as_mut() {
             let observations: Vec<_> = block

@@ -9,9 +9,19 @@ pub(crate) struct ScanPlan {
     pub(crate) service_probe_options: crate::types::ServiceProbeOptions,
     #[serde(default)]
     pub(crate) required_services: Vec<String>,
+    /// Task-level web content enrichment override (currently the on/off switch).
+    /// Absent on older servers and older plans: the runtime configuration decides.
+    #[serde(default)]
+    pub(crate) web_content: Option<WebContentOverride>,
     pub(crate) version: u16,
     pub(crate) profile: String,
     pub(crate) stages: Vec<ScanStageSpec>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct WebContentOverride {
+    #[serde(default)]
+    pub(crate) enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -108,6 +118,7 @@ impl ScanPlan {
         Self {
             service_probe_options: Default::default(),
             required_services: Vec::new(),
+            web_content: None,
             version: SCAN_PLAN_VERSION,
             profile: "legacy".into(),
             stages,
@@ -333,6 +344,7 @@ mod tests {
         let mut plan = ScanPlan {
             service_probe_options: Default::default(),
             required_services: Vec::new(),
+            web_content: None,
             version: 2,
             profile: "port_only".into(),
             stages: vec![],
