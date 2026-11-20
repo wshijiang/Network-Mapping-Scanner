@@ -321,6 +321,7 @@ async fn send_pinned(
     max_redirects: usize,
     accept: &str,
 ) -> Result<(reqwest::Response, Vec<String>), ()> {
+    let pinned_host = url.host_str().unwrap_or_default().to_owned();
     let mut current = url.clone();
     let mut chain = Vec::new();
     for _ in 0..=max_redirects {
@@ -339,6 +340,19 @@ async fn send_pinned(
             && let Some(mut next) = current.join(location).ok()
             && matches!(next.scheme(), "http" | "https")
         {
+            // Pin every hop to the scanned socket. reqwest bypasses the
+            // custom resolver for IP literals, so a different IP literal
+            // must be rejected outright; domain names are safe because the
+            // resolver maps them to the scanned IP. An explicit different
+            // port is another service and must never be fetched.
+            let host_ok = next.host_str() == Some(pinned_host.as_str())
+                || next
+                    .host_str()
+                    .is_some_and(|host| host.parse::<IpAddr>().is_err());
+            let port_ok = next.port().is_none_or(|port| port == endpoint_port);
+            if !host_ok || !port_ok {
+                return Ok((response, chain));
+            }
             if next.port().is_none() {
                 let _ = next.set_port(Some(endpoint_port));
             }
@@ -808,12 +822,26 @@ mod tests {
     /// Every request is answered with Connection: close; redirects may point at
     /// other hostnames because the pinned resolver must keep them on this server.
     async fn serve(listener: tokio::net::TcpListener, routes: Vec<(String, u16, String, Vec<u8>)>) {
+        serve_with_location(
+            listener,
+            routes,
+            "http://redirected.example/landing".to_owned(),
+        )
+        .await;
+    }
+
+    async fn serve_with_location(
+        listener: tokio::net::TcpListener,
+        routes: Vec<(String, u16, String, Vec<u8>)>,
+        location: String,
+    ) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         loop {
             let Ok((mut socket, _)) = listener.accept().await else {
                 return;
             };
             let routes = routes.clone();
+            let location = location.clone();
             tokio::spawn(async move {
                 let mut buffer = vec![0u8; 8192];
                 let Ok(read) = socket.read(&mut buffer).await else {
@@ -835,15 +863,13 @@ mod tests {
                 } else {
                     "Not Found"
                 };
-                // Redirect to another hostname on purpose: the pinned resolver
-                // must keep the connection on this test server.
-                let location = if status == 302 {
-                    "Location: http://redirected.example/landing\r\n"
+                let location_header = if status == 302 {
+                    format!("Location: {location}\r\n")
                 } else {
-                    ""
+                    String::new()
                 };
                 let head = format!(
-                    "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{location_header}Content-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
                 );
                 let _ = socket.write_all(head.as_bytes()).await;
@@ -859,6 +885,109 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         (addr, tokio::spawn(serve(listener, routes)))
+    }
+
+    async fn local_server_with_location(
+        routes: Vec<(String, u16, String, Vec<u8>)>,
+        location: String,
+    ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        (
+            addr,
+            tokio::spawn(serve_with_location(listener, routes, location)),
+        )
+    }
+
+    /// Counts every request it receives; any hit proves an off-socket fetch.
+    async fn decoy_server(
+        bind: &str,
+    ) -> (
+        SocketAddr,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicUsize;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let counter = count.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let counter = counter.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let _ = socket.read(&mut buffer).await;
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nSECRET")
+                        .await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        (addr, count, handle)
+    }
+
+    async fn assert_redirect_stays_on_socket(decoy_bind: &str, location_host: &str) {
+        let (decoy_addr, decoy_count, decoy) = decoy_server(decoy_bind).await;
+        let location = format!("http://{location_host}:{}/secret", decoy_addr.port());
+        let (addr, server) = local_server_with_location(
+            vec![("/".into(), 302, "text/html".into(), b"redirect".to_vec())],
+            location,
+        )
+        .await;
+        let mut service = service_with_body("", 302);
+        service.ip = addr.ip().to_string();
+        service.port = addr.port();
+        let config = config_for();
+        let mut services = vec![service];
+        enrich_block(
+            &config,
+            &mut services,
+            Instant::now() + Duration::from_secs(20),
+            &AtomicBool::new(false),
+            4 * 1024 * 1024,
+        )
+        .await;
+        server.abort();
+        decoy.abort();
+        assert_eq!(
+            decoy_count.load(Ordering::Relaxed),
+            0,
+            "off-socket redirect was fetched"
+        );
+        let evidence = services[0].data.as_ref().unwrap()["evidence"]
+            .as_array()
+            .unwrap();
+        if let Some(web) = evidence.iter().find(|item| item["module"] == "web_assets") {
+            let landing = &web["result"]["landing"];
+            assert_eq!(landing["status_code"], json!(302));
+            assert!(
+                !landing["body"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("SECRET")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn redirect_to_other_ip_literal_is_not_followed() {
+        // reqwest bypasses the custom resolver for IP literals: the hop must
+        // be rejected instead of fetching another address.
+        assert_redirect_stays_on_socket("127.0.0.2:0", "127.0.0.2").await;
+    }
+
+    #[tokio::test]
+    async fn redirect_to_explicit_other_port_is_not_followed() {
+        assert_redirect_stays_on_socket("127.0.0.1:0", "127.0.0.1").await;
     }
 
     fn png_bytes() -> Vec<u8> {
