@@ -463,10 +463,16 @@ async fn fetch_js(
                     .unwrap_or("")
                     .to_owned();
                 match read_bounded(response, web.max_js_bytes, true).await {
-                    Ok((bytes, _))
+                    Ok((bytes, truncated))
                         if !bytes.is_empty() && !looks_like_html(&bytes, &content_type) =>
                     {
-                        json!({"path": path, "url": full_url, "size": bytes.len(), "hash_md5": md5_hex(&bytes), "status": "success"})
+                        // A prefix MD5 is not the asset's MD5: keep the path
+                        // searchable but never publish a partial hash.
+                        if truncated {
+                            json!({"path": path, "url": full_url, "size": bytes.len(), "status": "truncated"})
+                        } else {
+                            json!({"path": path, "url": full_url, "size": bytes.len(), "hash_md5": md5_hex(&bytes), "status": "success"})
+                        }
                     }
                     Ok((_, _)) => json!({"path": path, "url": full_url, "status": "html_response"}),
                     Err(()) => json!({"path": path, "url": full_url, "status": "error"}),
@@ -971,6 +977,55 @@ mod tests {
                 .ends_with("/favicon.ico")
         );
         assert!(web["result"].get("landing").is_none());
+    }
+
+    #[tokio::test]
+    async fn oversized_js_keeps_path_but_no_prefix_hash() {
+        let big_js = vec![b'a'; 4096];
+        let (addr, server) = local_server(vec![
+            (
+                "/".into(),
+                200,
+                "text/html".into(),
+                b"<html><script src=\"/big.js\"></script></html>".to_vec(),
+            ),
+            (
+                "/big.js".into(),
+                200,
+                "application/javascript".into(),
+                big_js.clone(),
+            ),
+        ])
+        .await;
+        let mut service = service_with_body("<html><script src=\"/big.js\"></script></html>", 200);
+        service.ip = addr.ip().to_string();
+        service.port = addr.port();
+        let mut config = config_for();
+        config.web_content.max_js_bytes = 1024;
+        let mut services = vec![service];
+        enrich_block(
+            &config,
+            &mut services,
+            Instant::now() + Duration::from_secs(20),
+            &AtomicBool::new(false),
+            4 * 1024 * 1024,
+        )
+        .await;
+        server.abort();
+        let evidence = services[0].data.as_ref().unwrap()["evidence"]
+            .as_array()
+            .unwrap();
+        let web = evidence
+            .iter()
+            .find(|item| item["module"] == "web_assets")
+            .unwrap();
+        let entry = &web["result"]["js"][0];
+        assert_eq!(entry["path"], json!("/big.js"));
+        assert_eq!(entry["status"], json!("truncated"));
+        assert!(
+            entry.get("hash_md5").is_none(),
+            "prefix MD5 must not be published"
+        );
     }
 
     #[tokio::test]

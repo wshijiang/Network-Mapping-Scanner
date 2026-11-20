@@ -9,6 +9,7 @@
   - 外部 JS：提取同源 `<script src>`（跳过内联 / `data:` / 跨域），默认每页最多 **10** 个，逐个下载计算 **MD5**（只存哈希与路径，不存内容），单文件上限 512KB。
   - 落地页：仅当原探测为 3xx 或空 body 时条件性重抓 `/`，body 上限 256KB；重定向手动跟随且**钉死目标 IP 与端口**（自定义 DNS resolver + Location 缺省端口回填），跨主机名重定向不会把证据记到第三方服务器。
   - 严格有界：全局并发信号量（默认 16）、单请求超时（默认 10s）、块级总预算（默认 120s）、结果字节预算（沿用 64MB 块上限）；取消/超时保留已完成部分，富化失败绝不升级为扫描失败。
+  - 超限 JS 只记录路径与 `truncated` 状态，**绝不发布前缀 MD5**；任务级覆盖只能关闭富化、不能突破运行时开关（本地 AND 远端）；取消到达时已完成的块先落 journal 再退出，重启不丢已完成探测。
   - 配置：`[service_detection.web_content]`（enabled 默认 true、concurrency、fetch_timeout_seconds、max_redirects、max_stage_seconds、max_favicon_bytes、max_js_files、max_js_bytes、max_body_bytes、user_agent），服务端运行时配置可覆盖全部数值，有效开关为本地 AND 远端；任务级 `scan_plan.web_content.enabled` 可单任务关闭。旧服务端/旧计划无该字段时按本地默认运行，协议与 plan 版本不变。
 
 ## v0.1.22（2026-11-18）

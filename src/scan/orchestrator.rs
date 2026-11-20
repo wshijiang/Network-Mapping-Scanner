@@ -29,6 +29,21 @@ pub(crate) struct ScanRuntimeConfig<'a> {
     pub(crate) ipv6_ready: bool,
 }
 
+/// A task may opt out of web content enrichment, but never opt back in past
+/// the effective (local AND server-published) runtime switch — the same
+/// authorization rule the engine switches follow.
+fn apply_web_content_override(
+    service_detection: &mut crate::types::ServiceDetectionConfig,
+    plan: &ScanPlan,
+) {
+    if let Some(enabled) = plan
+        .web_content
+        .and_then(|override_cfg| override_cfg.enabled)
+    {
+        service_detection.web_content.enabled &= enabled;
+    }
+}
+
 /// Execute the configured scan pipeline.
 ///
 /// Engines own process execution and output parsing. This orchestrator owns
@@ -66,12 +81,7 @@ pub(crate) async fn run_scan(
     let mut service_detection = config.service_detection.clone();
     service_detection.required_services = plan.required_services.clone();
     service_detection.probe_options = plan.service_probe_options.clone();
-    if let Some(enabled) = plan
-        .web_content
-        .and_then(|override_cfg| override_cfg.enabled)
-    {
-        service_detection.web_content.enabled = enabled;
-    }
+    apply_web_content_override(&mut service_detection, plan);
     let mut config = ScanRuntimeConfig {
         service_detection: &service_detection,
         ..config
@@ -818,6 +828,27 @@ done
         assert_eq!(dual_stack.len(), 2);
         assert_eq!(dual_stack[0].ip, "192.0.2.10");
         assert_eq!(dual_stack[1].ip, "2001:db8::10");
+    }
+
+    #[test]
+    fn task_override_can_disable_but_not_reenable_web_content() {
+        let mut service = ServiceDetectionConfig::default();
+        service.web_content.enabled = false;
+        let mut plan = ScanPlan::legacy(&service);
+        plan.web_content = Some(crate::scan::plan::WebContentOverride {
+            enabled: Some(true),
+        });
+        super::apply_web_content_override(&mut service, &plan);
+        assert!(
+            !service.web_content.enabled,
+            "task must not bypass the runtime opt-out"
+        );
+        plan.web_content = Some(crate::scan::plan::WebContentOverride {
+            enabled: Some(false),
+        });
+        service.web_content.enabled = true;
+        super::apply_web_content_override(&mut service, &plan);
+        assert!(!service.web_content.enabled, "task opt-out must apply");
     }
 
     #[cfg(unix)]

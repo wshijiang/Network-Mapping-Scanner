@@ -252,10 +252,6 @@ pub(crate) async fn run_with_journal(
         )
         .await;
         service_bytes = service_bytes.saturating_add(added_bytes);
-        if cancel_requested.load(Ordering::Relaxed) {
-            save_elapsed(&mut journal, previous_elapsed, started)?;
-            return Ok(EngineOutcome::Cancelled);
-        }
         if let Some(j) = journal.as_mut() {
             let observations: Vec<_> = block
                 .iter()
@@ -270,6 +266,12 @@ pub(crate) async fn run_with_journal(
             )?;
         }
         services.extend(block);
+        // The completed block is journaled first: cancellation during
+        // enrichment must not lose finished probes on restart.
+        if cancel_requested.load(Ordering::Relaxed) {
+            save_elapsed(&mut journal, previous_elapsed, started)?;
+            return Ok(EngineOutcome::Cancelled);
+        }
         tracing::info!(
             event = "ServiceDetectionChunkCompleted",
             chunk_index,
@@ -1583,6 +1585,12 @@ mod tests {
             zgrab_path: wrapper.to_string_lossy().into_owned(),
             connect_timeout_seconds: 2,
             target_timeout_seconds: 5,
+            // Identification assertions count probe requests/evidence; keep
+            // the enrichment pass out of this fixture.
+            web_content: crate::types::WebContentConfig {
+                enabled: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let endpoint = open_port("127.0.0.1", port, "tcp");
