@@ -1,6 +1,7 @@
 pub(crate) mod dns;
 pub(crate) mod masscan;
 pub(crate) mod nuclei;
+pub(crate) mod web_content;
 pub(crate) mod zgrab2;
 
 pub(crate) mod native;

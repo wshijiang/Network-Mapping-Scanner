@@ -42,6 +42,26 @@ target_timeout_seconds = 15
 # Maximum structured zgrab2 detail retained per service result.
 max_result_bytes = 65536
 
+# Optional concurrent web asset enrichment for identified http/https endpoints:
+# favicon bytes (MD5-hashed server-side), external JS paths + MD5, and a
+# conditional landing-page body when the probe hit a redirect or empty body.
+# Best-effort: failures never fail the scan. Server runtime configuration can
+# override every value below; the effective switch is local AND remote.
+[service_detection.web_content]
+enabled = true
+# Global in-flight fetch limit shared by favicon and JS requests.
+concurrency = 16
+fetch_timeout_seconds = 10
+max_redirects = 3
+# Total enrichment budget per service-detection block.
+max_stage_seconds = 120
+# Raw favicon byte cap (uploaded base64-encoded).
+max_favicon_bytes = 65536
+max_js_files = 10
+max_js_bytes = 524288
+max_body_bytes = 262144
+# user_agent = "Mozilla/5.0 (compatible; NetworkMappingScanner/1.0)"
+
 [dns]
 # 默认使用系统递归解析器，任务也可指定 UDP/TCP DNS 服务器。设为 false 可禁用 DNS 任务。
 enabled = true

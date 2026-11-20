@@ -48,6 +48,9 @@ pub(crate) struct RemoteServiceDetectionConfig {
     pub(crate) connect_timeout_seconds: u64,
     pub(crate) target_timeout_seconds: u64,
     pub(crate) max_result_bytes: usize,
+    /// Absent on older servers: keep the local web content configuration.
+    #[serde(default)]
+    pub(crate) web_content: Option<crate::types::WebContentConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -232,6 +235,11 @@ impl RuntimeConfiguration {
         service.batch_endpoints = remote.service_detection.batch_endpoints;
         service.idle_timeout_seconds = remote.service_detection.idle_timeout_seconds;
         service.max_runtime_seconds = remote.service_detection.max_runtime_seconds;
+        if let Some(remote_web) = &remote.service_detection.web_content {
+            let mut web = remote_web.clone();
+            web.enabled = self.local_service.web_content.enabled && remote_web.enabled;
+            service.web_content = web;
+        }
         let mut dns = self.local_dns.clone();
         dns.enabled = self.local_dns_enabled && remote.dns.enabled;
         dns.record_types = remote.dns.record_types.clone();
@@ -306,6 +314,10 @@ impl RemoteRuntimeConfiguration {
             || !(4_096..=1_048_576).contains(&self.nuclei.max_result_bytes)
         {
             return Err("runtime Nuclei configuration contains an invalid value".into());
+        }
+        if let Some(web) = &self.service_detection.web_content {
+            web.validate()
+                .map_err(|_| "runtime web content configuration contains an invalid value")?;
         }
         Ok(())
     }
