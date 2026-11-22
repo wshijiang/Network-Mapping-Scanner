@@ -5,6 +5,7 @@ use crate::scan::detection::{
 use crate::scan::{PortObservation, ServiceObservation};
 use crate::types::ServiceDetectionConfig;
 use serde_json::{Value, json};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -335,14 +336,21 @@ async fn run_attempts(
             ProcessOutcome::Cancelled => return Ok(ProcessOutcome::Cancelled),
         }
     }
+    // server_rate_limit is a per-target-IP connection rate — the same contract
+    // zgrab2 applies to external probes. Pace each IP independently instead of
+    // serializing every native probe behind one global interval: a block with
+    // hundreds of endpoints would otherwise spend tens of seconds queueing
+    // probes that touch distinct IPs.
     let gap = Duration::from_secs_f64(1.0 / f64::from(config.server_rate_limit.max(1)));
+    let senders = config.senders.max(1) as usize;
     let native: Vec<_> = attempts.iter().filter(|a| a.probe.is_native()).collect();
+    let mut pending: VecDeque<(usize, &ProbeAttempt)> =
+        native.iter().copied().enumerate().collect();
+    let mut ip_next_start: HashMap<&str, Instant> = HashMap::new();
     let mut running = JoinSet::new();
     let mut completed = Vec::new();
-    let mut next = 0;
-    let mut next_start = Instant::now() + gap;
     let mut progress = tokio::time::interval(Duration::from_secs(30));
-    while next < native.len() || !running.is_empty() {
+    while !pending.is_empty() || !running.is_empty() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(ProcessOutcome::Cancelled);
         }
@@ -354,21 +362,43 @@ async fn run_attempts(
                 "service_detection_runtime_exceeded",
             ));
         }
+        // Launch every probe whose IP pacing window has elapsed, up to the
+        // shared sender capacity.
+        while running.len() < senders {
+            let now = Instant::now();
+            let Some(position) = pending.iter().position(|(_, attempt)| {
+                ip_next_start
+                    .get(attempt.ip.as_str())
+                    .is_none_or(|ready| *ready <= now)
+            }) else {
+                break;
+            };
+            let (index, attempt) = pending.remove(position).expect("position is valid");
+            ip_next_start.insert(attempt.ip.as_str(), now + gap);
+            let attempt = attempt.clone();
+            let probe_config = config.clone();
+            running.spawn(async move {
+                (
+                    index,
+                    super::native::probe(&attempt, &probe_config, deadline).await,
+                )
+            });
+        }
+        if pending.is_empty() && running.is_empty() {
+            break;
+        }
+        let next_wake = pending
+            .iter()
+            .filter_map(|(_, attempt)| ip_next_start.get(attempt.ip.as_str()).copied())
+            .min()
+            .unwrap_or(deadline);
         tokio::select! {
-            _ = tokio::time::sleep_until(next_start), if next < native.len() && running.len() < config.senders.max(1) as usize => {
-                let attempt = native[next].clone();
-                let probe_config = config.clone();
-                let index = next;
-                running.spawn(async move { (index, super::native::probe(&attempt, &probe_config, deadline).await) });
-                next += 1;
-                next_start = Instant::now() + gap;
-            }
             result = running.join_next(), if !running.is_empty() => {
                 let result = result.expect("nonempty probe set").map_err(|error| ScannerError::Scan(format!("native probe task failed: {error}")))?;
                 completed.push(result);
             }
+            _ = tokio::time::sleep_until(next_wake), if !pending.is_empty() && running.len() < senders => {}
             _ = progress.tick() => tracing::info!(event="ServiceDetectionProgress", completed_probes=completed.len(), total_probes=native.len(), in_flight=running.len(), "native service probes progressing"),
-            _ = sleep(Duration::from_millis(20)) => {},
             _ = tokio::time::sleep_until(deadline) => {},
         }
     }
@@ -2413,5 +2443,83 @@ done
         assert_eq!(evidence.len(), 2);
         assert!(evidence.iter().all(|item| item.status == "success"));
         server.await.unwrap();
+    }
+
+    async fn vnc_listener(address: &str) -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.write_all(b"RFB 003.008\n").await.unwrap();
+            let mut byte = [0];
+            let _ = stream.read(&mut byte).await;
+        });
+        (port, server)
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn native_probes_pace_per_ip_instead_of_globally() {
+        // 10 probes/s per IP: three distinct IPs must not queue behind one
+        // global 100ms interval (the old scheduler needed >=300ms here).
+        let mut servers = Vec::new();
+        let mut ports = Vec::new();
+        for ip in ["127.0.0.1:0", "127.0.0.2:0", "127.0.0.3:0"] {
+            let (port, server) = vnc_listener(ip).await;
+            ports.push(open_port(ip.split(':').next().unwrap(), port, "tcp"));
+            servers.push(server);
+        }
+        let config = ServiceDetectionConfig {
+            required_services: vec!["vnc".into()],
+            zgrab_path: "/missing/zgrab2".into(),
+            server_rate_limit: 10,
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let EngineOutcome::Completed(results) =
+            run(&config, &ports, "ipv4", &AtomicBool::new(false))
+                .await
+                .unwrap()
+        else {
+            panic!("incomplete");
+        };
+        assert!(started.elapsed() < Duration::from_millis(150));
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|s| s.service.as_deref() == Some("vnc")));
+        for server in servers {
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn native_probes_to_one_ip_keep_the_per_ip_rate_limit() {
+        let mut servers = Vec::new();
+        let mut ports = Vec::new();
+        for _ in 0..3 {
+            let (port, server) = vnc_listener("127.0.0.1:0").await;
+            ports.push(open_port("127.0.0.1", port, "tcp"));
+            servers.push(server);
+        }
+        let config = ServiceDetectionConfig {
+            required_services: vec!["vnc".into()],
+            zgrab_path: "/missing/zgrab2".into(),
+            server_rate_limit: 10,
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let EngineOutcome::Completed(results) =
+            run(&config, &ports, "ipv4", &AtomicBool::new(false))
+                .await
+                .unwrap()
+        else {
+            panic!("incomplete");
+        };
+        // Three probes to one IP at 10/s need two 100ms pacing gaps.
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|s| s.service.as_deref() == Some("vnc")));
+        for server in servers {
+            server.await.unwrap();
+        }
     }
 }
