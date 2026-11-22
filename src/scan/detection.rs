@@ -314,6 +314,32 @@ pub(crate) fn fallback_attempts(
         });
     let mut attempts = Vec::new();
     for (ip, port) in unique_tcp_endpoints(open_ports) {
+        // When every initial probe failed before TCP was established, further
+        // probes cannot succeed either. Skip the fallback round instead of
+        // waiting out another full set of connect timeouts on a dead endpoint.
+        // Any other status (protocol-error, io-timeout, connection-closed, ...)
+        // means the transport was reached, so the endpoint keeps its fallback.
+        let mut endpoint_probes = 0;
+        let mut transport_reached = false;
+        for item in evidence
+            .iter()
+            .filter(|item| item.ip == ip && item.port == port)
+        {
+            endpoint_probes += 1;
+            if !matches!(
+                item.status.as_str(),
+                "connection-refused"
+                    | "connection-timeout"
+                    | "connection-error"
+                    | "blocklisted-target"
+                    | "invalid-inputs"
+            ) {
+                transport_reached = true;
+            }
+        }
+        if endpoint_probes > 0 && !transport_reached {
+            continue;
+        }
         // HTTPS is also DoH's transport. Refine it before treating the endpoint
         // as terminal, including HTTPS discovered on a nonstandard port.
         let refine_https = evidence.iter().any(|item| {
@@ -1156,6 +1182,78 @@ mod tests {
             Some("SSH-2.0-OpenSSH_9.6"),
         )];
         assert!(fallback_attempts(&ports, &initial, &evidence, &config).is_empty());
+    }
+
+    #[test]
+    fn endpoints_that_never_reached_tcp_skip_the_fallback_round() {
+        let config = ServiceDetectionConfig {
+            strategy: ServiceDetectionStrategy::Adaptive,
+            max_probes_per_endpoint: 8,
+            ..ServiceDetectionConfig::default()
+        };
+        let ports = [port(9000), port(9001)];
+        let initial = initial_attempts(&ports, &config);
+        // 9000: every probe fails before TCP is established. 9001: the banner
+        // probe reaches an application that speaks an unknown protocol.
+        let evidence: Vec<_> = initial
+            .iter()
+            .map(|attempt| {
+                let status = if attempt.port == 9000 {
+                    "connection-timeout"
+                } else if attempt.probe == ProbeKind::Banner {
+                    "protocol-error"
+                } else {
+                    "connection-refused"
+                };
+                evidence(attempt.probe.name(), attempt.port, status, None)
+            })
+            .collect();
+        let fallback = fallback_attempts(&ports, &initial, &evidence, &config);
+        assert!(!fallback.is_empty());
+        assert!(fallback.iter().all(|attempt| attempt.port == 9001));
+    }
+
+    #[test]
+    fn fallback_survives_only_when_a_probe_reached_the_transport() {
+        let config = ServiceDetectionConfig {
+            strategy: ServiceDetectionStrategy::Adaptive,
+            max_probes_per_endpoint: 8,
+            ..ServiceDetectionConfig::default()
+        };
+        let ports = [port(9000)];
+        let initial = initial_attempts(&ports, &config);
+        for status in [
+            "connection-closed",
+            "io-timeout",
+            "protocol-error",
+            "handshake-error",
+            "unknown-error",
+        ] {
+            let evidence: Vec<_> = initial
+                .iter()
+                .map(|attempt| evidence(attempt.probe.name(), attempt.port, status, None))
+                .collect();
+            assert!(
+                !fallback_attempts(&ports, &initial, &evidence, &config).is_empty(),
+                "{status} reached the transport and keeps its fallback"
+            );
+        }
+        for status in [
+            "connection-refused",
+            "connection-timeout",
+            "connection-error",
+            "blocklisted-target",
+            "invalid-inputs",
+        ] {
+            let evidence: Vec<_> = initial
+                .iter()
+                .map(|attempt| evidence(attempt.probe.name(), attempt.port, status, None))
+                .collect();
+            assert!(
+                fallback_attempts(&ports, &initial, &evidence, &config).is_empty(),
+                "{status} never established TCP and skips the fallback"
+            );
+        }
     }
 
     #[test]
