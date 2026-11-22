@@ -35,6 +35,13 @@ pub(crate) async fn probe(
                 io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof => "protocol-error",
                 io::ErrorKind::TimedOut => "connection-timeout",
                 io::ErrorKind::PermissionDenied => "tls-error",
+                // Actively rejected at connect: a genuine connect-level failure.
+                io::ErrorKind::ConnectionRefused => "connection-refused",
+                // Reset/abort after the transport was established: the endpoint
+                // was reached, so keep it eligible for adaptive fallback.
+                io::ErrorKind::ConnectionReset
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::BrokenPipe => "connection-closed",
                 _ => "connection-error",
             },
             None,

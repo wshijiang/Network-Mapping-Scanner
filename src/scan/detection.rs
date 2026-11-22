@@ -314,11 +314,13 @@ pub(crate) fn fallback_attempts(
         });
     let mut attempts = Vec::new();
     for (ip, port) in unique_tcp_endpoints(open_ports) {
-        // When every initial probe failed before TCP was established, further
+        // When every initial probe failed at the TCP connect stage, further
         // probes cannot succeed either. Skip the fallback round instead of
         // waiting out another full set of connect timeouts on a dead endpoint.
-        // Any other status (protocol-error, io-timeout, connection-closed, ...)
-        // means the transport was reached, so the endpoint keeps its fallback.
+        // Only statuses known to originate from the connect attempt (or before
+        // it) suppress fallback; ambiguous connection-error and any post-connect
+        // status (protocol-error, io-timeout, connection-closed, ...) mean the
+        // transport may have been reached, so the endpoint keeps its fallback.
         let mut endpoint_probes = 0;
         let mut transport_reached = false;
         for item in evidence
@@ -330,7 +332,6 @@ pub(crate) fn fallback_attempts(
                 item.status.as_str(),
                 "connection-refused"
                     | "connection-timeout"
-                    | "connection-error"
                     | "blocklisted-target"
                     | "invalid-inputs"
             ) {
@@ -1228,6 +1229,8 @@ mod tests {
             "protocol-error",
             "handshake-error",
             "unknown-error",
+            // Ambiguous: may be a post-connect reset, so keep the fallback.
+            "connection-error",
         ] {
             let evidence: Vec<_> = initial
                 .iter()
@@ -1235,13 +1238,12 @@ mod tests {
                 .collect();
             assert!(
                 !fallback_attempts(&ports, &initial, &evidence, &config).is_empty(),
-                "{status} reached the transport and keeps its fallback"
+                "{status} may have reached the transport and keeps its fallback"
             );
         }
         for status in [
             "connection-refused",
             "connection-timeout",
-            "connection-error",
             "blocklisted-target",
             "invalid-inputs",
         ] {
