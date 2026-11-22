@@ -40,7 +40,12 @@ pub(crate) async fn probe(
             None,
             json!({"error_code": if error.kind()==io::ErrorKind::PermissionDenied { "tls_validation_or_handshake_failed" } else { "probe_failed" }}),
         ),
-        Err(_) => ("connection-timeout", None, Value::Null),
+        // The outer deadline fired after the TCP connect already succeeded (a
+        // connect timeout surfaces as Ok(Err(TimedOut)) above). Report a
+        // post-connect stall as io-timeout, matching zgrab2, so adaptive
+        // fallback does not mistake a reached-but-silent endpoint for an
+        // unreachable one.
+        Err(_) => ("io-timeout", None, Value::Null),
     };
     ProbeEvidence {
         ip: attempt.ip.clone(),
@@ -208,6 +213,36 @@ mod tests {
                 assert_eq!(evidence.detail["result"]["protocol_version"], "003.008");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn post_connect_stall_reports_io_timeout_not_connection_timeout() {
+        // The listener accepts but never sends a greeting: TCP is established,
+        // then the read stalls until the target deadline. That must surface as
+        // io-timeout (transport reached) so adaptive fallback is not suppressed.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        });
+        let config = ServiceDetectionConfig {
+            connect_timeout_seconds: 1,
+            target_timeout_seconds: 1,
+            ..Default::default()
+        };
+        let evidence = probe(
+            &ProbeAttempt {
+                ip: "127.0.0.1".into(),
+                port,
+                probe: ProbeKind::Vnc,
+            },
+            &config,
+            Instant::now() + Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(evidence.status, "io-timeout");
+        server.await.unwrap();
     }
 
     #[tokio::test]
