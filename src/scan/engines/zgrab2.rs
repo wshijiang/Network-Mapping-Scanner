@@ -180,8 +180,19 @@ pub(crate) async fn run_with_journal(
             j.start_block()?;
         }
         let initial = initial_attempts(ports, config);
-        let result =
-            run_attempts(config, &initial, address_family, cancel_requested, deadline).await;
+        // One per-IP schedule per block, shared by the initial and fallback
+        // rounds so a native fallback probe inherits the window left by the
+        // initial round's probes to the same IP.
+        let mut pacing: HashMap<String, Instant> = HashMap::new();
+        let result = run_attempts(
+            config,
+            &initial,
+            address_family,
+            cancel_requested,
+            deadline,
+            &mut pacing,
+        )
+        .await;
         let mut evidence;
         let mut timeout_reason = None;
         match result {
@@ -207,6 +218,7 @@ pub(crate) async fn run_with_journal(
                 address_family,
                 cancel_requested,
                 deadline,
+                &mut pacing,
             )
             .await
             {
@@ -309,6 +321,10 @@ async fn run_attempts(
     address_family: &str,
     cancel: &AtomicBool,
     deadline: Instant,
+    // Per-IP next-allowed-launch schedule, shared across the initial and
+    // fallback rounds of a block so the politeness window survives round
+    // boundaries as well as the external/native engine boundary.
+    pacing: &mut HashMap<String, Instant>,
 ) -> Result<ProcessOutcome, ScannerError> {
     let external: Vec<_> = attempts
         .iter()
@@ -346,15 +362,15 @@ async fn run_attempts(
     let native: Vec<_> = attempts.iter().filter(|a| a.probe.is_native()).collect();
     let mut pending: VecDeque<(usize, &ProbeAttempt)> =
         native.iter().copied().enumerate().collect();
-    let mut ip_next_start: HashMap<&str, Instant> = HashMap::new();
     // Carry the per-IP politeness window across the engine boundary: an IP that
     // just received external/modbus connections must wait one interval before
     // its first native probe, otherwise the native phase could connect less
     // than 1/server_rate_limit after the last zgrab2 connection to that IP.
-    // Native-only IPs are unseeded and start immediately.
+    // IPs with no external attempt this round keep any schedule inherited from
+    // the previous round (native-only IPs start immediately on first touch).
     let boundary = Instant::now() + gap;
     for attempt in external.iter().chain(modbus.iter()) {
-        ip_next_start.entry(attempt.ip.as_str()).or_insert(boundary);
+        pacing.insert(attempt.ip.clone(), boundary);
     }
     let mut running = JoinSet::new();
     let mut completed = Vec::new();
@@ -376,14 +392,14 @@ async fn run_attempts(
         while running.len() < senders {
             let now = Instant::now();
             let Some(position) = pending.iter().position(|(_, attempt)| {
-                ip_next_start
+                pacing
                     .get(attempt.ip.as_str())
                     .is_none_or(|ready| *ready <= now)
             }) else {
                 break;
             };
             let (index, attempt) = pending.remove(position).expect("position is valid");
-            ip_next_start.insert(attempt.ip.as_str(), now + gap);
+            pacing.insert(attempt.ip.clone(), now + gap);
             let attempt = attempt.clone();
             let probe_config = config.clone();
             running.spawn(async move {
@@ -398,7 +414,7 @@ async fn run_attempts(
         }
         let next_wake = pending
             .iter()
-            .filter_map(|(_, attempt)| ip_next_start.get(attempt.ip.as_str()).copied())
+            .filter_map(|(_, attempt)| pacing.get(attempt.ip.as_str()).copied())
             .min()
             .unwrap_or(deadline);
         tokio::select! {
@@ -1640,6 +1656,7 @@ mod tests {
             "ipv4",
             &AtomicBool::new(false),
             Instant::now() + Duration::from_secs(15),
+            &mut HashMap::new(),
         )
         .await
         .unwrap() else {
@@ -2181,6 +2198,7 @@ else:
             "ipv4",
             &AtomicBool::new(false),
             Instant::now() + Duration::from_secs(1),
+            &mut HashMap::new(),
         )
         .await
         .unwrap();
@@ -2402,6 +2420,7 @@ done
                 "ipv4",
                 &AtomicBool::new(false),
                 deadline,
+                &mut HashMap::new(),
             )
             .await
             .unwrap();
@@ -2441,6 +2460,7 @@ done
                 "ipv4",
                 &AtomicBool::new(false),
                 Instant::now() + Duration::from_secs(5),
+                &mut HashMap::new(),
             ),
         )
         .await
@@ -2568,6 +2588,7 @@ done
             "ipv4",
             &AtomicBool::new(false),
             Instant::now() + Duration::from_secs(5),
+            &mut HashMap::new(),
         )
         .await
         .unwrap();
@@ -2588,5 +2609,49 @@ done
         );
         std::fs::remove_file(path).unwrap();
         vnc_server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_fallback_round_inherits_per_ip_window_from_initial_round() {
+        let (first_port, first_server) = vnc_listener("127.0.0.1:0").await;
+        let (second_port, second_server) = vnc_listener("127.0.0.1:0").await;
+        let config = ServiceDetectionConfig {
+            zgrab_path: "/missing/zgrab2".into(),
+            server_rate_limit: 2, // 500ms per-IP interval
+            ..Default::default()
+        };
+        let initial = [ProbeAttempt {
+            ip: "127.0.0.1".into(),
+            port: first_port,
+            probe: ProbeKind::Vnc,
+        }];
+        let fallback = [ProbeAttempt {
+            ip: "127.0.0.1".into(),
+            port: second_port,
+            probe: ProbeKind::Vnc,
+        }];
+        let cancel = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // One shared schedule across both rounds, as run_with_journal passes.
+        let mut pacing: HashMap<String, Instant> = HashMap::new();
+        let first = run_attempts(&config, &initial, "ipv4", &cancel, deadline, &mut pacing)
+            .await
+            .unwrap();
+        assert!(matches!(first, ProcessOutcome::Completed(_)));
+        let started = Instant::now();
+        let second = run_attempts(&config, &fallback, "ipv4", &cancel, deadline, &mut pacing)
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert!(matches!(second, ProcessOutcome::Completed(_)));
+        // The fallback round is native-only for this IP; it must still wait out
+        // the interval left by the initial round's probe instead of connecting
+        // immediately.
+        assert!(
+            elapsed >= Duration::from_millis(400),
+            "fallback round should inherit the initial round's window, got {elapsed:?}"
+        );
+        first_server.await.unwrap();
+        second_server.await.unwrap();
     }
 }
