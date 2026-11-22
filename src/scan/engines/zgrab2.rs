@@ -347,6 +347,15 @@ async fn run_attempts(
     let mut pending: VecDeque<(usize, &ProbeAttempt)> =
         native.iter().copied().enumerate().collect();
     let mut ip_next_start: HashMap<&str, Instant> = HashMap::new();
+    // Carry the per-IP politeness window across the engine boundary: an IP that
+    // just received external/modbus connections must wait one interval before
+    // its first native probe, otherwise the native phase could connect less
+    // than 1/server_rate_limit after the last zgrab2 connection to that IP.
+    // Native-only IPs are unseeded and start immediately.
+    let boundary = Instant::now() + gap;
+    for attempt in external.iter().chain(modbus.iter()) {
+        ip_next_start.entry(attempt.ip.as_str()).or_insert(boundary);
+    }
     let mut running = JoinSet::new();
     let mut completed = Vec::new();
     let mut progress = tokio::time::interval(Duration::from_secs(30));
@@ -2521,5 +2530,63 @@ done
         for server in servers {
             server.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn native_probe_waits_one_interval_after_external_to_same_ip() {
+        use std::os::unix::fs::PermissionsExt;
+        let (vnc_port, vnc_server) = vnc_listener("127.0.0.1:0").await;
+        // A stub zgrab2 that immediately returns one successful banner result.
+        let line = format!(
+            "{{\"ip\":\"127.0.0.1\",\"data\":{{\"banner\":{{\"status\":\"success\",\"port\":{vnc_port},\"result\":{{\"banner\":\"x\"}}}}}}}}\n"
+        );
+        let path = std::env::temp_dir().join(format!("scanner-boundary-{}", uuid::Uuid::now_v7()));
+        std::fs::write(&path, format!("#!/bin/sh\nprintf '%s' '{line}'\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = ServiceDetectionConfig {
+            zgrab_path: path.to_string_lossy().into_owned(),
+            server_rate_limit: 2, // 500ms per-IP interval
+            ..Default::default()
+        };
+        let attempts = [
+            ProbeAttempt {
+                ip: "127.0.0.1".into(),
+                port: vnc_port,
+                probe: ProbeKind::Banner,
+            },
+            ProbeAttempt {
+                ip: "127.0.0.1".into(),
+                port: vnc_port,
+                probe: ProbeKind::Vnc,
+            },
+        ];
+        let started = Instant::now();
+        let result = run_attempts(
+            &config,
+            &attempts,
+            "ipv4",
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let elapsed = started.elapsed();
+        let ProcessOutcome::Completed(evidence) = result else {
+            panic!("probes did not complete")
+        };
+        assert!(
+            evidence
+                .iter()
+                .any(|item| item.module == "vnc" && item.status == "success")
+        );
+        // The native probe shares the IP with the external banner probe, so it
+        // must wait one 500ms interval instead of connecting immediately.
+        assert!(
+            elapsed >= Duration::from_millis(400),
+            "native probe should inherit the per-IP window, got {elapsed:?}"
+        );
+        std::fs::remove_file(path).unwrap();
+        vnc_server.await.unwrap();
     }
 }
