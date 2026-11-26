@@ -429,6 +429,11 @@ pub(crate) fn aggregate(
             {
                 retained_evidence.push(retained_handshake(tls));
             }
+            if !retained_evidence.iter().any(|item| item["module"] == "tls")
+                && let Some(tls) = evidence.iter().find_map(|item| failed_tls_certificate(item))
+            {
+                retained_evidence.push(tls);
+            }
             let data = json!({
                 "schema_version": 2,
                 "confidence": selected.map(|candidate| candidate.score).unwrap_or(0),
@@ -491,6 +496,41 @@ fn retained_handshake(item: &ProbeEvidence) -> Value {
         "result": result,
         "truncated": truncated,
     })
+}
+
+fn failed_tls_certificate(item: &ProbeEvidence) -> Option<Value> {
+    if item.module != ProbeKind::Tls.name() || item.status == "success" {
+        return None;
+    }
+    let result = &item.detail["result"];
+    let handshake = &result["handshake_log"];
+    let certificate = handshake.pointer("/server_certificates/certificate")?;
+    let parsed = certificate.get("parsed")?;
+    let hash = parsed["fingerprint_sha256"].as_str()?;
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    // A peer can send its certificate before rejecting the handshake.
+    // Keep the public observation without any client key exchange or secrets.
+    Some(json!({
+        "role": "transport_security",
+        "module": item.module,
+        "status": item.status,
+        "truncated": item.detail["truncated"] == true,
+        "result": {
+            "handshake_completed_successfully": false,
+            "handshake_log": {
+                "server_hello": {
+                    "version": handshake["server_hello"]["version"],
+                    "cipher_suite": handshake["server_hello"]["cipher_suite"]
+                },
+                "server_certificates": {"certificate": {
+                    "raw": certificate["raw"].as_str(),
+                    "parsed": parsed
+                }}
+            }
+        }
+    }))
 }
 
 fn unique_tcp_endpoints(open_ports: &[PortObservation]) -> Vec<(String, u16)> {
@@ -764,6 +804,38 @@ mod tests {
                 .service
                 .is_none()
         );
+    }
+
+    #[test]
+    fn retains_public_leaf_from_failed_tls_without_identifying_a_service() {
+        let mut attempt = evidence("tls", 18444, "unknown-error", None);
+        let hash = "a".repeat(64);
+        attempt.detail = json!({"result": {"handshake_log": {
+            "server_hello": {"version": {"name":"TLSv1.2"}, "session_id": "session-data"},
+            "server_certificates": {"certificate": {"parsed": {"fingerprint_sha256": hash}}},
+            "client_key_exchange": {"ecdh_params": {"client_private": "key-material"}}
+        }}});
+        let result = aggregate(&[attempt.clone()], &ServiceDetectionConfig::default());
+        assert!(result[0].service.is_none());
+        let retained = &result[0].data.as_ref().unwrap()["evidence"][0];
+        assert_eq!(retained["status"], "unknown-error");
+        assert_eq!(
+            retained["result"]["handshake_completed_successfully"],
+            false
+        );
+        assert_eq!(
+            retained.pointer(
+                "/result/handshake_log/server_certificates/certificate/parsed/fingerprint_sha256"
+            ),
+            Some(&json!(hash))
+        );
+        let output = retained.to_string();
+        assert!(!output.contains("key-material"));
+        assert!(!output.contains("session-data"));
+
+        attempt.detail["result"]["handshake_log"]["server_certificates"] = Value::Null;
+        let result = aggregate(&[attempt], &ServiceDetectionConfig::default());
+        assert_eq!(result[0].data.as_ref().unwrap()["evidence"], json!([]));
     }
 
     #[test]
