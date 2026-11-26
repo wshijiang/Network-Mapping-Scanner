@@ -1362,9 +1362,11 @@ async fn flush(
         return Ok(());
     }
 
+    let started = std::time::Instant::now();
     let ranges = cache.upload_ranges(scanner_id)?;
+    let planning_ms = started.elapsed().as_millis();
     let first_batch = cache.batch_at(scanner_id, &ranges, cache.next_batch_index)?;
-    if let Some(first) = first_batch.as_ref() {
+    if let Some(first) = first_batch {
         tracing::debug!(
             task_id = %first.task_id,
             upload_id = %first.upload_id,
@@ -1403,6 +1405,8 @@ async fn flush(
     }
     tracing::info!(
         event = "ResultUploadCompleted",
+        elapsed_ms = started.elapsed().as_millis(),
+        planning_ms,
         task_id = %task_id,
         upload_id = %upload_id,
         batch_count,

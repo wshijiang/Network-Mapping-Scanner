@@ -93,7 +93,7 @@ sudo install -m 0600 config.toml /etc/network-mapping-scanner/config.toml
 [scanner]
 c_server = "server.example.com"
 c_port = 9999
-rate = 1000
+rate = 10000
 verify_tls = true
 scanner_path = "/usr/local/bin/masscan"
 masscan_output_mode = "standard_list"

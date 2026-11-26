@@ -18,6 +18,8 @@
 
 ## 从这里开始
 
+[服务识别与上传性能核查](SCAN_PERFORMANCE.md)：本地基准、连接复用及慢上传分阶段定位。
+
 | 当前任务 | 建议阅读顺序 |
 | --- | --- |
 | 新增扫描节点 | [部署选型与原生安装](DEPLOYMENT.md)或[Docker 部署](DOCKER.md) → [启动配置检查](CONFIG_CHECK.md) → [配置与使用](USAGE.md) |

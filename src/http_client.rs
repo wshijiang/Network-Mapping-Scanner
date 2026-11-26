@@ -245,6 +245,29 @@ pub(crate) async fn response_error(response: Response, operation: &'static str) 
     classify_status(status, detail, retry_after, request_id, operation)
 }
 
+/// Consume small acknowledgements so HTTP/1 connections can return to the pool.
+/// Keep body failures retryable: the server may have committed before a disconnect.
+pub(crate) async fn drain_acknowledgement(
+    mut response: Response,
+    operation: &'static str,
+) -> Result<(), ServerError> {
+    let mut bytes = 0usize;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| request_error(error, operation))?
+    {
+        bytes = bytes.saturating_add(chunk.len());
+        if bytes > 65_536 {
+            return Err(ServerError::InvalidResponse {
+                operation,
+                detail: "upload acknowledgement exceeds 65536 bytes".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(crate) async fn response_json<T: DeserializeOwned>(
     response: Response,
     operation: &'static str,
@@ -391,8 +414,9 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FetchTaskOutcome, ServerHttpClient, classify_status, fetch_task, parse_error_code,
-        parse_maintenance_response, parse_retry_after, response_json, task_outcome_without_body,
+        FetchTaskOutcome, ServerHttpClient, classify_status, drain_acknowledgement, fetch_task,
+        parse_error_code, parse_maintenance_response, parse_retry_after, response_json,
+        task_outcome_without_body,
     };
     use crate::error::ServerError;
     use reqwest::StatusCode;
@@ -400,7 +424,8 @@ mod tests {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    async fn fixture_response(body: &'static str, content_length: usize) -> String {
+    async fn fixture_response(body: impl Into<String>, content_length: usize) -> String {
+        let body = body.into();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -438,6 +463,28 @@ mod tests {
         };
         assert!(matches!(error, ServerError::Transport { .. }));
         assert!(error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn interrupted_upload_acknowledgement_remains_retryable() {
+        let url = fixture_response("{", 100).await;
+        let response = test_client().get(&url, "test").await.unwrap();
+        let error = drain_acknowledgement(response, "upload results")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ServerError::Transport { .. }));
+        assert!(error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn oversized_upload_acknowledgement_is_bounded() {
+        let body = "x".repeat(65_537);
+        let url = fixture_response(body, 65_537).await;
+        let response = test_client().get(&url, "test").await.unwrap();
+        let error = drain_acknowledgement(response, "upload results")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ServerError::InvalidResponse { .. }));
     }
 
     #[tokio::test]

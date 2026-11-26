@@ -302,6 +302,24 @@ pub(crate) fn fallback_attempts(
         return Vec::new();
     }
 
+    // Summarize once instead of scanning the entire batch for each endpoint.
+    // Borrow keys and retain the existing candidate selection and probe order.
+    #[derive(Default)]
+    struct EndpointEvidence {
+        transport_reached: bool,
+        https_succeeded: bool,
+        tls_succeeded: bool,
+    }
+    let mut endpoint_evidence: HashMap<(&str, u16), EndpointEvidence> = HashMap::new();
+    for item in evidence {
+        let summary = endpoint_evidence.entry((&item.ip, item.port)).or_default();
+        summary.transport_reached |= !matches!(
+            item.status.as_str(),
+            "connection-refused" | "connection-timeout" | "blocklisted-target" | "invalid-inputs"
+        );
+        summary.https_succeeded |= item.module == "https" && item.status == "success";
+        summary.tls_succeeded |= item.module == "tls" && item.status == "success";
+    }
     let confident = confident_endpoints(evidence, config);
     let completed: HashSet<_> = completed.iter().cloned().collect();
     let counts = completed
@@ -321,35 +339,18 @@ pub(crate) fn fallback_attempts(
         // it) suppress fallback; ambiguous connection-error and any post-connect
         // status (protocol-error, io-timeout, connection-closed, ...) mean the
         // transport may have been reached, so the endpoint keeps its fallback.
-        let mut endpoint_probes = 0;
-        let mut transport_reached = false;
-        for item in evidence
-            .iter()
-            .filter(|item| item.ip == ip && item.port == port)
-        {
-            endpoint_probes += 1;
-            if !matches!(
-                item.status.as_str(),
-                "connection-refused"
-                    | "connection-timeout"
-                    | "blocklisted-target"
-                    | "invalid-inputs"
-            ) {
-                transport_reached = true;
-            }
-        }
-        if endpoint_probes > 0 && !transport_reached {
+        let summary = endpoint_evidence.get(&(ip.as_str(), port));
+        if summary.is_some_and(|summary| !summary.transport_reached) {
             continue;
         }
         // HTTPS is also DoH's transport. Refine it before treating the endpoint
         // as terminal, including HTTPS discovered on a nonstandard port.
-        let refine_https = evidence.iter().any(|item| {
-            item.ip == ip && item.port == port && item.module == "https" && item.status == "success"
-        }) && !completed.contains(&ProbeAttempt {
-            ip: ip.clone(),
-            port,
-            probe: ProbeKind::Doh,
-        });
+        let refine_https = summary.is_some_and(|summary| summary.https_succeeded)
+            && !completed.contains(&ProbeAttempt {
+                ip: ip.clone(),
+                port,
+                probe: ProbeKind::Doh,
+            });
         if confident.contains(&(ip.clone(), port)) && !refine_https {
             continue;
         }
@@ -358,12 +359,7 @@ pub(crate) fn fallback_attempts(
             .saturating_sub(*counts.get(&(ip.clone(), port)).unwrap_or(&0));
         // Banner already covers server-first text protocols well, so spend the
         // bounded fallback budget on binary/client-first protocols first.
-        let tls_succeeded = evidence.iter().any(|item| {
-            item.ip == ip
-                && item.port == port
-                && item.module == ProbeKind::Tls.name()
-                && item.status == "success"
-        });
+        let tls_succeeded = summary.is_some_and(|summary| summary.tls_succeeded);
         let fallback_probes: &[ProbeKind] = if refine_https {
             &[ProbeKind::Doh]
         } else if tls_succeeded {
@@ -872,6 +868,46 @@ mod tests {
                 ProbeKind::Mqtts,
             ]
         );
+    }
+
+    #[test]
+    #[ignore = "manual CPU benchmark; no network traffic"]
+    fn benchmark_fallback_planning() {
+        let config = ServiceDetectionConfig::default();
+        for count in [512, 4096] {
+            let ports: Vec<_> = (0..count)
+                .map(|n| {
+                    let mut p = port(9000);
+                    p.ip = format!("192.0.{}.{}", n / 256, n % 256);
+                    p
+                })
+                .collect();
+            let initial = initial_attempts(&ports, &config);
+            let evidence: Vec<_> = initial
+                .iter()
+                .map(|a| ProbeEvidence {
+                    ip: a.ip.clone(),
+                    port: a.port,
+                    module: a.probe.name().into(),
+                    status: "protocol-error".into(),
+                    banner: None,
+                    detail: Value::Null,
+                })
+                .collect();
+            let mut samples = Vec::new();
+            for _ in 0..11 {
+                let start = std::time::Instant::now();
+                let result =
+                    std::hint::black_box(fallback_attempts(&ports, &initial, &evidence, &config));
+                assert_eq!(result.len(), count * 4);
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "FALLBACK_BENCH endpoints={count} median_ms={:.3}",
+                samples[5]
+            );
+        }
     }
 
     #[test]

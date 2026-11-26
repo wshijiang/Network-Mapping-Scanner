@@ -304,14 +304,14 @@ pub(crate) fn is_supported_dns_record_type(value: &str) -> bool {
 // ---- Upload payload -----------------------------------------------------
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct ScannerResultBatchUpload {
+pub(crate) struct ScannerResultBatchUpload<T = Vec<crate::scan::ScanObservation>> {
     pub(crate) protocol_version: u16,
     pub(crate) scanner_id: Uuid,
     pub(crate) task_id: Uuid,
     pub(crate) upload_id: Uuid,
     pub(crate) batch_index: u32,
     pub(crate) is_final: bool,
-    pub(crate) observations: Vec<crate::scan::ScanObservation>,
+    pub(crate) observations: T,
 }
 
 // ---- Configuration structures -------------------------------------------
