@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- **TLS 证据保留**：独立 TLS 探针在握手失败前已取得叶证书时，保留公开证书及必要服务端协商字段，维持失败状态；供服务端威胁线索分析使用。
+
 - **网页内容富化（favicon / JS / 落地页）**：服务识别出 http/https 端点后，新增并发、异步、 best-effort 的网页资产抓取阶段，结果作为 `web_assets` 证据随既有上传链路入库，供服务端 `icon_md5` / `js_name` / `js_md5` 检索与图标展示：
   - favicon：按 `<link rel=icon>` 候选（rel 优先级排序）抓取，兜底 `/favicon.ico`；魔数校验拒收 200-HTML 错误页；原始字节上限默认 **64KB**，base64 上传，MD5 由服务端投影时计算（与 Hunter `web.icon` / Quake `favicon.hash` 一致）。
   - 外部 JS：提取同源 `<script src>`（跳过内联 / `data:` / 跨域），默认每页最多 **10** 个，逐个下载计算 **MD5**（只存哈希与路径，不存内容），单文件上限 512KB。
