@@ -1205,8 +1205,10 @@ mod tests {
 
     #[test]
     fn product_evidence_budget_does_not_replace_the_selected_protocol() {
-        let mut config = ServiceDetectionConfig::default();
-        config.max_result_bytes = 128;
+        let config = ServiceDetectionConfig {
+            max_result_bytes: 128,
+            ..Default::default()
+        };
         let mut supplementary = evidence("http", 443, "success", Some("HTTP/1.1 302 Found"));
         supplementary.detail["result"]["response"]["body"] = json!("x".repeat(1024));
         let output = aggregate(
