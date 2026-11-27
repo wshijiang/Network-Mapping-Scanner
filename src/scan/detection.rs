@@ -857,6 +857,30 @@ mod tests {
     }
 
     #[test]
+    fn failed_mtls_keeps_product_certificate_fields_without_claiming_an_application() {
+        let mut attempt = evidence("tls", 18444, "handshake-error", None);
+        let leaf = json!({"fingerprint_sha256":"d".repeat(64), "subject_dn":"CN=multiplayer", "issuer_dn":"CN=operators",
+            "signature":{"self_signed":false,"signature_algorithm":{"name":"ECDSA-SHA256"}}});
+        attempt.detail = json!({"result":{"handshake_log":{
+            "server_certificates":{"certificate":{"parsed":leaf}},
+            "client_key_exchange":{"private_key":"not-public"}
+        }}});
+        let output = aggregate(&[attempt], &ServiceDetectionConfig::default());
+        assert!(output[0].service.is_none());
+        let retained = &output[0].data.as_ref().unwrap()["evidence"][0];
+        assert_eq!(retained["status"], "handshake-error");
+        assert_eq!(
+            retained["result"]["handshake_log"]["server_certificates"]["certificate"]["parsed"],
+            leaf
+        );
+        assert_eq!(
+            retained["result"]["handshake_completed_successfully"],
+            false
+        );
+        assert!(!retained.to_string().contains("not-public"));
+    }
+
+    #[test]
     fn standard_strategy_keeps_single_port_mapped_probe() {
         let config = ServiceDetectionConfig {
             strategy: ServiceDetectionStrategy::Standard,
