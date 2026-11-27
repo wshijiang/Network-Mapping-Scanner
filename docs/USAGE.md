@@ -118,6 +118,8 @@ ZGRAB2_TEST_BINARY=/absolute/path/to/zgrab2 cargo test --locked --lib real_zgrab
 
 网页内容富化启用时，完整读取的 JavaScript 在 `web_assets` 证据中携带 MD5 和 SHA-256，截断的资源只保留路径和读取状态。服务端可使用 SHA-256 匹配已接纳的文件情报；扫描结果只上传摘要和资源元数据。
 
+收到标准重定向且已有单一同源 `Location` 时，网页富化在允许跳转的配置下直接请求该地址一次。原端口、协议和主机保持一致，该请求不再继续跟随跳转。已记录的跨源或无效 `Location` 留作原响应证据。完整读取的同源 HTTP 200 落地正文可携带 SHA-256，部分响应和截断正文不生成文件哈希。
+
 当证书或其他扩展使握手超出 `max_result_bytes` 时，节点会在同一 JSON 大小预算内尽量
 保留 SSH 标识、HTTP Server 头和明确的系统字段，并标记 `evidence[].truncated`。
 HTTP 仅裁剪正文而保留其余握手时，同样标记为截断。

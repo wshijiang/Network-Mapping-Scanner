@@ -220,6 +220,41 @@ fn probe_body_and_status(service: &ServiceObservation) -> (Option<String>, Optio
     fallback
 }
 
+fn observed_location(service: &ServiceObservation) -> Option<&Value> {
+    service
+        .data
+        .as_ref()?
+        .get("evidence")?
+        .as_array()?
+        .iter()
+        .find_map(|item| {
+            (item["module"].as_str() == service.service.as_deref() && item["status"] == "success")
+                .then(|| item.pointer("/result/response/headers/location"))
+                .flatten()
+        })
+}
+
+fn same_origin_location(base: &reqwest::Url, location: &Value) -> Option<reqwest::Url> {
+    let text = location
+        .as_str()
+        .or_else(|| location.as_array().filter(|values| values.len() == 1)?[0].as_str())?;
+    if text.is_empty()
+        || text.len() > MAX_URL_CHARS
+        || text
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
+    {
+        return None;
+    }
+    let mut url = base.join(text).ok()?;
+    url.set_fragment(None);
+    (url.origin() == base.origin()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && &url != base)
+        .then_some(url)
+}
+
 /// Magic-byte validation: many servers answer /favicon.ico with a 200 HTML
 /// error page, which must not be stored or hashed as an icon.
 fn looks_like_image(bytes: &[u8], content_type: &str) -> bool {
@@ -507,6 +542,7 @@ async fn fetch_landing(
     web: &WebContentConfig,
     sem: &Semaphore,
     base: &reqwest::Url,
+    direct: Option<&reqwest::Url>,
     deadline: Instant,
 ) -> Option<Value> {
     if Instant::now() >= deadline {
@@ -516,14 +552,27 @@ async fn fetch_landing(
     let endpoint_port = base.port().unwrap_or(80);
     let (response, chain) = send_pinned(
         client,
-        base,
+        direct.unwrap_or(base),
         endpoint_port,
-        web.max_redirects,
+        if direct.is_some() {
+            0
+        } else {
+            web.max_redirects
+        },
         "text/html,*/*;q=0.8",
     )
     .await
     .ok()?;
     let status = response.status().as_u16();
+    let hashable = status == 200
+        && response.url().origin() == base.origin()
+        && response
+            .headers()
+            .get(reqwest::header::CONTENT_ENCODING)
+            .is_none_or(|encoding| encoding.as_bytes().eq_ignore_ascii_case(b"identity"))
+        && !response
+            .headers()
+            .contains_key(reqwest::header::CONTENT_RANGE);
     let final_url = strip_nul(
         &response
             .url()
@@ -546,6 +595,12 @@ async fn fetch_landing(
         "body": body,
         "body_truncated": truncated || body_truncated,
     });
+    if hashable && !truncated && !body_truncated {
+        landing["hash_sha256"] = json!(digest(&bytes));
+    }
+    if direct.is_some() {
+        landing["probe"] = json!("same_origin_redirect");
+    }
     if !chain.is_empty() {
         landing["redirects"] = json!(chain);
     }
@@ -566,24 +621,35 @@ async fn enrich_service(
     let mut body = body.unwrap_or_default();
 
     let mut result = serde_json::Map::new();
-    // A redirect or empty probe body means the real page was never captured:
-    // re-fetch "/" first and extract favicon/JS references from the landing HTML.
-    let needs_landing =
-        status.is_some_and(|code| (300..400).contains(&code)) || body.trim().is_empty();
-    if needs_landing && let Some(landing) = fetch_landing(&client, web, &sem, &base, deadline).await
+    let redirect = matches!(status, Some(301 | 302 | 303 | 307 | 308));
+    let location = redirect.then(|| observed_location(service)).flatten();
+    let direct = location
+        .filter(|_| web.max_redirects > 0)
+        .and_then(|value| same_origin_location(&base, value));
+    // An observed redirect can be checked in a single request without
+    // fetching the original URL again or following additional hops.
+    let probe_landing =
+        direct.is_some() || (location.is_none() && (redirect || body.trim().is_empty()));
+    let mut document_base = base.clone();
+    if probe_landing
+        && let Some(landing) =
+            fetch_landing(&client, web, &sem, &base, direct.as_ref(), deadline).await
     {
         if let Some(landing_body) = landing.get("body").and_then(Value::as_str)
             && !landing_body.trim().is_empty()
         {
             body = landing_body.to_owned();
+            if let Some(url) = direct {
+                document_base = url;
+            }
         }
         result.insert("landing".into(), landing);
     }
-    let candidates = favicon_candidates(&body, &base);
+    let candidates = favicon_candidates(&body, &document_base);
     if let Some(favicon) = fetch_favicon(&client, web, &sem, &base, &candidates, deadline).await {
         result.insert("favicon".into(), favicon);
     }
-    let scripts = script_sources(&body, &base);
+    let scripts = script_sources(&body, &document_base);
     if !scripts.is_empty() {
         let (js, js_truncated) = fetch_js(&client, web, &sem, &base, &scripts, deadline).await;
         if !js.is_empty() {
@@ -722,6 +788,27 @@ mod tests {
 
     fn base() -> reqwest::Url {
         reqwest::Url::parse("http://192.0.2.1:8080/").unwrap()
+    }
+
+    #[test]
+    fn follow_up_requires_one_exact_same_origin_location() {
+        let base = base();
+        for location in [
+            "http://192.0.2.2:8080/next",
+            "http://192.0.2.1/next",
+            "https://192.0.2.1:8080/next",
+            "http://other.example:8080/next",
+            "/#fragment",
+        ] {
+            assert!(same_origin_location(&base, &json!(location)).is_none());
+        }
+        assert!(same_origin_location(&base, &json!(["/one", "/two"])).is_none());
+        assert_eq!(
+            same_origin_location(&base, &json!(["/next?x=y#fragment"]))
+                .unwrap()
+                .as_str(),
+            "http://192.0.2.1:8080/next?x=y"
+        );
     }
 
     #[test]
@@ -1008,7 +1095,6 @@ mod tests {
             <body><script src="/app.js"></script>hello</body></html>"#;
         let js = b"console.log('hi');";
         let (addr, server) = local_server(vec![
-            ("/".into(), 302, "text/html".into(), b"redirect".to_vec()),
             (
                 "/landing".into(),
                 200,
@@ -1024,9 +1110,11 @@ mod tests {
             ),
         ])
         .await;
-        // The probe saw a redirect; the landing page must be re-fetched. The
-        // redirect target uses another hostname to prove DNS pinning.
+        // There is no redirect at "/" on this test server. The captured
+        // Location must be used directly to obtain the landing page.
         let mut service = service_with_body("", 302);
+        service.data.as_mut().unwrap()["evidence"][0]["result"]["response"]["headers"] =
+            json!({"location": ["/landing"]});
         service.ip = addr.ip().to_string();
         service.port = addr.port();
         let config = config_for();
@@ -1057,6 +1145,8 @@ mod tests {
             json!("57b43dfc3c26aaf74f190e1dcba9dc34cb03e7686f9aeaad2d22747cae8c76bf")
         );
         assert_eq!(result["landing"]["status_code"], json!(200));
+        assert_eq!(result["landing"]["probe"], "same_origin_redirect");
+        assert_eq!(result["landing"]["hash_sha256"], digest(html.as_bytes()));
         assert!(
             result["landing"]["body"]
                 .as_str()

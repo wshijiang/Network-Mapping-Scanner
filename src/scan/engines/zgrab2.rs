@@ -988,12 +988,39 @@ pub(super) fn bounded_detail(module_data: &Value, max_result_bytes: usize) -> Va
             max_result_bytes,
         );
     }
+    for path in [
+        "/response/status_code",
+        "/response/content_length",
+        "/response/request/url",
+    ] {
+        if let Some(value) = module_data.pointer(&format!("/result{path}")) {
+            retain_compact_field(&mut summary, path, value.clone(), max_result_bytes);
+        }
+    }
     if let Some(headers) = module_data
         .pointer("/result/response/headers")
         .and_then(Value::as_object)
     {
         for (name, value) in headers {
-            if !name.eq_ignore_ascii_case("server") {
+            let name = name.to_ascii_lowercase();
+            if !matches!(name.as_str(), "server" | "content_type" | "location") {
+                continue;
+            }
+            if name == "location" {
+                // Keep the exact header or omit it. A prefix could point at a
+                // different resource and is unsafe to use as a request target.
+                if value.as_str().is_some_and(|v| v.len() <= 2048)
+                    || value.as_array().is_some_and(|a| {
+                        a.len() == 1 && a[0].as_str().is_some_and(|v| v.len() <= 2048)
+                    })
+                {
+                    retain_compact_field(
+                        &mut summary,
+                        "/response/headers/location",
+                        value.clone(),
+                        max_result_bytes,
+                    );
+                }
                 continue;
             }
             let values: Vec<String> = if let Some(text) = value.as_str() {
@@ -1010,7 +1037,7 @@ pub(super) fn bounded_detail(module_data: &Value, max_result_bytes: usize) -> Va
             };
             retain_compact_field(
                 &mut summary,
-                "/response/headers/server",
+                &format!("/response/headers/{name}"),
                 json!(values),
                 max_result_bytes,
             );
@@ -1519,10 +1546,18 @@ mod tests {
     #[test]
     fn http_envelope_exceeding_budget_still_reports_truncation() {
         let detail = json!({"status": "success", "result": {"response": {
-            "body": "<title>Camera</title>", "headers": {"large": "x".repeat(2048)}
+            "body": "<title>Camera</title>", "status_code": 302,
+            "request": {"url": {"scheme": "https", "host": "192.0.2.1", "path": "/"}},
+            "headers": {"large": "x".repeat(2048), "location": ["/next"], "content_type": ["text/html"]}
         }}});
         let bounded = bounded_detail(&detail, 1024);
         assert_eq!(bounded["truncated"], true);
+        assert_eq!(bounded["result"]["response"]["status_code"], 302);
+        assert_eq!(
+            bounded["result"]["response"]["headers"]["location"],
+            json!(["/next"])
+        );
+        assert_eq!(bounded["result"]["response"]["request"]["url"]["path"], "/");
         assert!(serde_json::to_vec(&bounded).unwrap().len() <= 1024);
     }
 
