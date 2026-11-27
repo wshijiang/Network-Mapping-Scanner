@@ -264,11 +264,11 @@ probe_timeout_seconds = 5
 
 扫描器继续上传 `http`、`https`、`tls`、`ssh` 等既有 `service` 协议结果及其原始观察。已有 Web 技术栈和旧 C2 指纹结果继续由配套服务端处理；本次为同一端点的已执行探测保留有预算的补充观察，供服务端生成通用的 `products[]` 与 `product_identification`。
 
-当前产品规则支持 nginx、Apache HTTP Server、OpenSSH 的软件声明，以及 Cobalt Strike、AsyncRAT / DcRAT、Sliver Multiplayer 管理端和 QakBot 历史证书候选。扫描器负责采集与上传，产品匹配由服务端完成。基础补充证据保留和服务端本地规则分析不新增探测请求；另行启用 JARM 时才会增加后文说明的额外连接。
+扫描器负责采集和上传，产品匹配由服务端完成。服务端规则支持 nginx、Apache HTTP Server、OpenSSH 软件声明，Cobalt Strike、AsyncRAT / DcRAT、Sliver 和 QakBot 证书候选，以及 Mythic Web UI 和 Empire / Starkiller 管理页候选。管理页规则复用已保存的 HTTP/HTTPS 正文和符合规则条件的 `web_assets` 同源落地页。[服务端产品表](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#当前支持与判断范围)
 
 扫描器在选中服务握手之后，按 TLS、HTTP、HTTPS 顺序尽量保留每个模块的一份成功补充观察。补充证据总量最多两倍 `service_detection.max_result_bytes`，仍受既有 64 MiB 结果块限制；超预算省略的补充观察通过 `data.product_evidence_truncated=true` 标记。已自包含 TLS 日志的应用握手不重复保存独立 TLS 观察。失败 TLS 中可用的公开证书沿用原有保留策略。原协议名、置信度、探测计划、取消恢复及网页内容富化开关保持原义。
 
-控制台「服务」列同时显示协议与产品。证书规则只形成疑似产品，不确认 C2 服务角色或恶意用途，不自动生成整个 IP 的恶意标签。这些本地证书与声明规则无需新增节点配置；旧扫描器保留的原始证据仍可使用，具体覆盖范围取决于当时保存的字段。产品查询、存量回填与 API 见[服务端使用说明](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#服务产品识别)。
+控制台「服务」列同时显示协议与产品。证书和管理页规则产生端口级「疑似」候选。服务端规则可直接使用旧扫描器已保存的字段，无需调整节点配置或增加探测请求。额外的 JARM 连接由独立配置控制。[产品查询与存量回填](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#服务产品识别)
 
 ### Sliver 与 QakBot 产品候选
 
@@ -283,7 +283,7 @@ QakBot 基于公开研究中的历史证书主体/颁发者组合，结果为需
 | --- | --- | --- | --- |
 | JARM | 是，显式启用后额外最多 10 次 TCP 连接与 ClientHello 探测 | 对 10 组不同 ClientHello 的服务端密码套件、TLS 版本、ALPN 与扩展响应生成 62 个十六进制字符的指纹 | 保存 TLS 配置指纹；当前没有以 JARM 单独归属 C2 家族的规则 |
 | TLS Certificate | 证书采集是；分析复用已有观察，无额外连接 | 分析叶证书主题、颁发者、有效期、公钥等元数据 | Cobalt Strike、AsyncRAT / DcRAT、Sliver、QakBot 候选，适用[服务端规则边界](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#sliver-与-qakbot-的候选边界) |
-| HTTP Fingerprint | HTTP 采集是；产品规则复用已有响应 | 分析 HTTP 状态、响应头和内容特征 | 当前产品规则采用 nginx / Apache 的 Server 声明；网页技术识别仍走现有流程 |
+| HTTP Fingerprint | HTTP 采集是；产品规则复用已有响应 | 分析 HTTP 状态、响应头和内容特征 | nginx / Apache 的 Server 声明，以及 Mythic / Empire 管理页候选 |
 | Protocol Fingerprint | 通常是；已有工业被动接收方式除外，识别复用已有握手 | 根据应用层握手和协议响应识别服务 | 既有协议识别及 OpenSSH 软件声明；不表示已实现各 C2 的私有协议规则 |
 
 在扫描器本地 `config.toml` 中明确允许 JARM：
