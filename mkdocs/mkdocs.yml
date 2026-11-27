@@ -51,6 +51,7 @@ nav:
       - masscan 适配与迁移: MASSCAN.md
       - Nuclei 部署与运维: NUCLEI.md
       - 目标执行反馈: PERFORMANCE.md
+      - 服务识别与上传性能: SCAN_PERFORMANCE.md
   - 运维排障:
       - 扫描与上传恢复: recovery.md
       - 扫描缓存管理: CACHE_MANAGEMENT.md

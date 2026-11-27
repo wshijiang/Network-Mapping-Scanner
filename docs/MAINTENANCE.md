@@ -443,7 +443,7 @@ c_server = "example.com"
 # Target API server port
 c_port = 443
 # Masscan packet rate
-rate = 10000000
+rate = 10000
 # Masscan source port
 source_port = 61000
 # Verify TLS certificates (set to false for self-signed certs)
@@ -503,7 +503,7 @@ endpoint = "https://example.com/api/scanner/result"
 |------|------|--------|------|
 | `scanner.c_server` | string | — | 目标 API 主机名 |
 | `scanner.c_port` | int | — | 目标 API 端口 |
-| `scanner.rate` | int | — | masscan 本地发包速率 |
+| `scanner.rate` | int | `10000`（示例，须显式填写） | masscan 本地发包速率上限 |
 | `scanner.verify_tls` | bool | `false` | 是否验证 TLS 证书 |
 | `scanner.scanner_path` | string | `"./a"` | 扫描器二进制路径；也可填写能从 `PATH` 解析的命令名 |
 | `scanner.masscan_output_mode` | string | `"compatible"` | `compatible` 或 `standard_list`，本地决定输出契约 |
@@ -866,3 +866,5 @@ DEBUG 日志覆盖配置加载、启动模式、任务 HTTP 状态、任务上�
 新增字段应同步服务端协议适配与固定样本，不能把未知字段名或软件包版本当作系统版本。
 回归检查：`cargo test --locked scan::engines::zgrab2`，并检查上传批次大小约束。
 服务端规则、权限和历史重算见[识别维护说明](https://github.com/wshijiang/network-mapping/blob/main/docs/OS_DETECTION_DEVELOPMENT.md)。
+
+服务识别与上传的基准、计时日志和分阶段定位方法见 [性能核查](SCAN_PERFORMANCE.md)。

@@ -4,7 +4,7 @@ c_server = "example.com"
 # Target API server port
 c_port = 443
 # Masscan packet rate
-rate = 10000000
+rate = 10000
 # Verify TLS certificates (set to false for self-signed certs)
 verify_tls = true
 # Path to masscan binary (port discovery only)

@@ -4,7 +4,7 @@
 # Target API server hostname
 c_server = "server.example.com"
 c_port = 9999
-rate = 1000
+rate = 10000
 verify_tls = true
 scanner_path = "/usr/local/bin/masscan"
 masscan_output_mode = "standard_list"

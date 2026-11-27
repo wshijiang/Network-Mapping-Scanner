@@ -116,7 +116,7 @@ impl CacheManager {
         scanner_id: Uuid,
         ranges: &[std::ops::Range<usize>],
         index: u32,
-    ) -> Result<Option<ScannerResultBatchUpload>, ScannerError> {
+    ) -> Result<Option<ScannerResultBatchUpload<&[ScanObservation]>>, ScannerError> {
         let Some(range) = ranges.get(index as usize) else {
             return Ok(None);
         };
@@ -131,7 +131,7 @@ impl CacheManager {
                 .ok_or_else(|| ScannerError::Upload("missing upload identity".into()))?,
             batch_index: index,
             is_final: index as usize + 1 == ranges.len(),
-            observations: self.observations[range.clone()].to_vec(),
+            observations: &self.observations[range.clone()],
         }))
     }
 
@@ -242,7 +242,7 @@ fn upload_batch_ranges(
             .map_err(|_| ScannerError::Upload("observation batch index exceeded u32".into()))?;
         // `false` is one byte longer than `true`, so this is also a safe estimate
         // for the final batch after its marker changes.
-        let empty_batch = ScannerResultBatchUpload {
+        let empty_batch: ScannerResultBatchUpload = ScannerResultBatchUpload {
             protocol_version: RESULT_PROTOCOL_VERSION,
             scanner_id,
             task_id,
@@ -290,6 +290,107 @@ mod tests {
 
     fn uuid(value: &str) -> Uuid {
         Uuid::parse_str(value).expect("valid test UUID")
+    }
+
+    #[test]
+    fn borrowed_batches_preserve_wire_bytes_and_resume_boundaries() {
+        let scanner_id = Uuid::nil();
+        let mut cache = CacheManager::default();
+        cache.begin_task(Uuid::now_v7()).unwrap();
+        for port in 1..=1001 {
+            cache
+                .insert(&ScanObservation::Port(PortObservation {
+                    ip: "192.0.2.1".into(),
+                    port,
+                    protocol: "tcp".into(),
+                    state: "open".into(),
+                    source: "masscan".into(),
+                    observed_at: 1,
+                }))
+                .unwrap();
+        }
+        let ranges = cache.upload_ranges(scanner_id).unwrap();
+        let owned = cache.upload_batches(scanner_id).unwrap();
+        for (index, expected) in owned.iter().enumerate() {
+            let actual = cache
+                .batch_at(scanner_id, &ranges, index as u32)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                actual.observations.as_ptr(),
+                cache.observations[ranges[index].clone()].as_ptr()
+            );
+            assert_eq!(
+                serde_json::to_vec(&actual).unwrap(),
+                serde_json::to_vec(expected).unwrap()
+            );
+        }
+        cache.mark_batch_uploaded(0).unwrap();
+        assert_eq!(
+            cache
+                .batch_at(scanner_id, &ranges, cache.next_batch_index)
+                .unwrap()
+                .unwrap()
+                .batch_index,
+            1
+        );
+        assert!(cache.batch_at(scanner_id, &ranges, 3).unwrap().is_none());
+        cache.clear().unwrap();
+        cache.begin_task(Uuid::now_v7()).unwrap();
+        let ranges = cache.upload_ranges(scanner_id).unwrap();
+        let empty = cache.batch_at(scanner_id, &ranges, 0).unwrap().unwrap();
+        assert!(empty.observations.is_empty() && empty.is_final);
+    }
+
+    #[test]
+    #[ignore = "manual upload preparation benchmark; no network traffic"]
+    fn benchmark_upload_preparation() {
+        let scanner_id = Uuid::nil();
+        let mut cache = CacheManager::default();
+        cache.begin_task(Uuid::now_v7()).unwrap();
+        for port in 1..=500 {
+            cache
+                .insert(&ScanObservation::Service(ServiceObservation {
+                    ip: "192.0.2.1".into(),
+                    port,
+                    protocol: "tcp".into(),
+                    service: Some("https".into()),
+                    banner: None,
+                    source: "zgrab2".into(),
+                    data: Some(serde_json::json!({"body": "x".repeat(12000)})),
+                    observed_at: 1,
+                }))
+                .unwrap();
+        }
+        let ranges = cache.upload_ranges(scanner_id).unwrap();
+        for borrowed in [false, true] {
+            let mut samples = Vec::new();
+            for _ in 0..21 {
+                let start = std::time::Instant::now();
+                let batch = cache.batch_at(scanner_id, &ranges, 0).unwrap().unwrap();
+                let bytes = if borrowed {
+                    serde_json::to_vec(&batch).unwrap()
+                } else {
+                    let owned = ScannerResultBatchUpload {
+                        observations: batch.observations.to_vec(),
+                        protocol_version: batch.protocol_version,
+                        scanner_id: batch.scanner_id,
+                        task_id: batch.task_id,
+                        upload_id: batch.upload_id,
+                        batch_index: batch.batch_index,
+                        is_final: batch.is_final,
+                    };
+                    serde_json::to_vec(&owned).unwrap()
+                };
+                std::hint::black_box(bytes);
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "UPLOAD_PREP_BENCH borrowed={borrowed} observations=500 body_bytes=12000 median_ms={:.3}",
+                samples[10]
+            );
+        }
     }
 
     #[test]
