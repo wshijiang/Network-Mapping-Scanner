@@ -270,6 +270,8 @@ probe_timeout_seconds = 5
 
 控制台「服务」列同时显示协议与产品。证书和管理页规则产生端口级「疑似」候选。服务端规则可直接使用旧扫描器已保存的字段，无需调整节点配置或增加探测请求。额外的 JARM 连接由独立配置控制。[产品查询与存量回填](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#服务产品识别)
 
+规则 v6 起，可在服务端配置外部 JSON 规则包。基于已有观察字段添加规则时，扫描器继续按同一格式上传证据。[服务端规则包](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PRODUCT_RULES.md)
+
 ### Sliver 与 QakBot 产品候选
 
 Sliver 与 QakBot 候选从服务端产品规则 v2 起支持（当前规则修订见配套服务端文档），复用本节描述的 TLS/HTTPS 公开证书，不需要增加节点参数、端口选择或请求。Sliver 的首批范围是默认 Multiplayer 多人管理端证书，不等于通用 mTLS 或植入体监听器识别。握手后续失败时，可用的叶证书字段沿用原有保留链路，协议选择仍可保持未知，不能把证书候选当作成功应用握手。
