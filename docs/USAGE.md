@@ -273,3 +273,41 @@ probe_timeout_seconds = 5
 服务端产品规则 v2 复用本节描述的 TLS/HTTPS 公开证书，不需要增加节点参数、端口选择或请求。Sliver 的首批范围是默认 Multiplayer 多人管理端证书，不等于通用 mTLS 或植入体监听器识别。握手后续失败时，可用的叶证书字段沿用原有保留链路，协议选择仍可保持未知，不能把证书候选当作成功应用握手。
 
 QakBot 基于公开研究中的历史证书主体/颁发者组合，结果为需复核的历史启发式候选。字段缺失、被裁剪、出现在证书链或 HTTPS 跳转目的站时不能据此归属源端口；不发送家族专属通信，也不依据端口号或空响应猜测家族。旧扫描器只要保存了所需字段即可使用新版服务端规则；已有数据进入产品搜索的方法见[服务端使用说明](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#sliver-与-qakbot-的候选边界)。
+
+
+## 检测方式与 JARM 主动采集
+
+| 检测方式 | 是否主动探测 | 基本原理 | 当前用途 |
+| --- | --- | --- | --- |
+| JARM | 是，显式启用后额外最多 10 次 TCP/TLS 握手 | 对 10 组不同 ClientHello 的服务端密码套件、TLS 版本、ALPN 与扩展响应生成 62 位指纹 | 保存 TLS 配置指纹；当前没有以 JARM 单独归属 C2 家族的规则 |
+| TLS Certificate | 证书采集是；分析复用已有观察，无额外连接 | 分析叶证书主题、颁发者、有效期、公钥等元数据 | Cobalt Strike、AsyncRAT / DcRAT、Sliver、QakBot 候选，适用[服务端规则边界](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#sliver-与-qakbot-的候选边界) |
+| HTTP Fingerprint | HTTP 采集是；产品规则复用已有响应 | 分析 HTTP 状态、响应头和内容特征 | 当前产品规则采用 nginx / Apache 的 Server 声明；网页技术识别仍走现有流程 |
+| Protocol Fingerprint | 通常是；已有工业被动接收方式除外，识别复用已有握手 | 根据应用层握手和协议响应识别服务 | 既有协议识别及 OpenSSH 软件声明；不表示已实现各 C2 的私有协议规则 |
+
+在扫描器本地 `config.toml` 中明确允许 JARM：
+
+```toml
+[service_detection.jarm]
+enabled = true
+concurrency = 4
+probe_timeout_seconds = 3
+max_stage_seconds = 60
+```
+
+再在控制台「扫描器 → 配置 → JARM 主动采集」启用该扫描器的远程开关。服务识别本身也需启用。JARM 本地和服务端默认均为关闭，远程开启不能覆盖本地禁用；旧服务端未下发该段时保留本地配置。配置在下一任务快照生效。模块模式需要同步更新 service-detection worker，旧 worker 不具备 JARM 采集能力。
+
+参数范围：`concurrency` 1–32、`probe_timeout_seconds` 1–30 秒、`max_stage_seconds` 1–3600 秒。并发以端点计，每端点固定 10 个按原始顺序的探测槽，无重试；沿用 `server_rate_limit` 的每 IP 连接间隔。每连接最多读取 64 KiB，仅解析 ServerHello/拒绝响应，不发送应用层请求；同时受块级总预算、任务剩余预算、取消信号及 64 MiB 结果上限约束。
+
+只对本次已有 TLS ServerHello 或证书证据的 TCP 端点采集（包括保留服务端证书的失败 mTLS 握手），不按端口号猜测，不跟随 HTTPS 跳转目的站。连接固定到扫描 IP 与端口；任务 `probe_options.server_name` 仅作为经过校验的 SNI，无此项时使用扫描 IP 文本，不执行额外 DNS 解析。
+
+成功指纹要求完整完成 10 个槽且至少一个 ServerHello。显式 TLS 拒绝或尚未收到任何字节时的正常关闭记为空槽；超时、连接异常、截断、畸形或超限响应标为不完整，不生成有效哈希。全部拒绝显示 `no_response`，不发布全零指纹。块级超时或取消会丢弃尚在执行的端点采集，保留基础服务证据和已完成端点；采集失败不会使基础扫描失败。JARM 与单次 ServerHello 的 JA3S 不同，共享指纹只说明 TLS 配置相似，不能单独确认家族或恶意用途。
+
+API 在 `product_identification` 中补充：
+
+- `detection_methods[]`：`id`（`jarm` / `tls_certificate` / `http_fingerprint` / `protocol_fingerprint`）、`name`、`active_probe`（采集是否需要主动网络交互）、`additional_probe`（是否额外连接）、`observed`（该次观察是否有此类证据；仅被动协议证据时 `active_probe=false`）、`principle`（稳定原理键）。方式清单不代表四类方式均已采集成功。
+- `jarm`：未采集时为 `null`；否则包含 `status`（`success` / `partial` / `no_response`）、`fingerprint`（不完整或全部拒绝为 `null`）、`expected_probes`、`attempted_probes`、`completed_probes`、`sni`、`field_path`。有效完成数包括明确拒绝，不等同于成功 ServerHello 数。
+- `products[].evidence[].detection_method` 标明产品规则使用的方式。新字段缺省兼容旧数据，不把历史观察标成已完成 JARM。
+
+搜索、端口当前与历史 API 沿用产品观察时钟携带这些元数据；JARM 不创建虚构产品或自动恶意标签，也未增加 JARM DSL 过滤字段。只有新扫描能获取新 JARM；重放旧数据不会主动连接网络。
+
+实现使用固定版本 [netfp 0.2.1](https://docs.rs/netfp/0.2.1/netfp/) 的纯编解码与哈希组件，网络、速率及预算由扫描器控制。算法说明见 [Salesforce JARM](https://github.com/salesforce/jarm)。回归仅使用本地合成 TLS 响应，未探测外部 C2，也不代表已完成各类真实部署验证。

@@ -465,6 +465,39 @@ pub(crate) struct ServiceDetectionConfig {
     /// body) for identified http/https endpoints. Enabled by default; failures
     /// degrade to the base probe evidence and never fail the scan.
     pub(crate) web_content: WebContentConfig,
+    /// Additional TLS handshakes require explicit local opt-in.
+    pub(crate) jarm: JarmConfig,
+}
+
+/// Optional, bounded Salesforce JARM collection. Ten connections per TLS endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub(crate) struct JarmConfig {
+    pub(crate) enabled: bool,
+    pub(crate) concurrency: usize,
+    pub(crate) probe_timeout_seconds: u64,
+    pub(crate) max_stage_seconds: u64,
+}
+impl Default for JarmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            concurrency: 4,
+            probe_timeout_seconds: 3,
+            max_stage_seconds: 60,
+        }
+    }
+}
+impl JarmConfig {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !(1..=32).contains(&self.concurrency)
+            || !(1..=30).contains(&self.probe_timeout_seconds)
+            || !(1..=3600).contains(&self.max_stage_seconds)
+        {
+            return Err("jarm bounds: concurrency 1..32, probe_timeout_seconds 1..30, max_stage_seconds 1..3600".into());
+        }
+        Ok(())
+    }
 }
 
 /// Bounds for the best-effort web content enrichment pass. Every value is
@@ -579,6 +612,7 @@ impl Default for ServiceDetectionConfig {
             target_timeout_seconds: 15,
             max_result_bytes: 65_536,
             web_content: WebContentConfig::default(),
+            jarm: JarmConfig::default(),
         }
     }
 }

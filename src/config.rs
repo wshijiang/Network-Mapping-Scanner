@@ -163,6 +163,10 @@ fn atomic_write(path: &str, contents: &[u8]) -> Result<(), ScannerError> {
 }
 
 fn validate(cfg: &AppConfig) -> Result<(), ScannerError> {
+    cfg.service_detection
+        .jarm
+        .validate()
+        .map_err(ScannerError::Config)?;
     let rules: &[(&str, bool, &str)] = &[
         (
             "scanner.c_server",

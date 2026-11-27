@@ -1,4 +1,5 @@
 pub(crate) mod dns;
+pub(crate) mod jarm;
 pub(crate) mod masscan;
 pub(crate) mod nuclei;
 pub(crate) mod web_content;

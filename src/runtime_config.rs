@@ -51,6 +51,8 @@ pub(crate) struct RemoteServiceDetectionConfig {
     /// Absent on older servers: keep the local web content configuration.
     #[serde(default)]
     pub(crate) web_content: Option<crate::types::WebContentConfig>,
+    #[serde(default)]
+    pub(crate) jarm: Option<crate::types::JarmConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -240,6 +242,11 @@ impl RuntimeConfiguration {
             web.enabled = self.local_service.web_content.enabled && remote_web.enabled;
             service.web_content = web;
         }
+        if let Some(remote_jarm) = &remote.service_detection.jarm {
+            let mut jarm = remote_jarm.clone();
+            jarm.enabled = self.local_service.jarm.enabled && remote_jarm.enabled;
+            service.jarm = jarm;
+        }
         let mut dns = self.local_dns.clone();
         dns.enabled = self.local_dns_enabled && remote.dns.enabled;
         dns.record_types = remote.dns.record_types.clone();
@@ -314,6 +321,9 @@ impl RemoteRuntimeConfiguration {
             || !(4_096..=1_048_576).contains(&self.nuclei.max_result_bytes)
         {
             return Err("runtime Nuclei configuration contains an invalid value".into());
+        }
+        if let Some(jarm) = &self.service_detection.jarm {
+            jarm.validate()?;
         }
         if let Some(web) = &self.service_detection.web_content {
             web.validate()
@@ -451,5 +461,48 @@ mod tests {
                 .stages
                 .contains(&"vulnerability_detection")
         );
+    }
+}
+
+#[cfg(test)]
+mod jarm_tests {
+    use super::*;
+    #[tokio::test]
+    async fn jarm_needs_local_opt_in_and_respects_remote_disable_or_legacy_absence() {
+        for (local_enabled, remote_enabled, expected) in [
+            (false, Some(true), false),
+            (true, Some(true), true),
+            (true, Some(false), false),
+            (false, None, false),
+            (true, None, true),
+        ] {
+            let mut local: AppConfig =
+                toml_edit::de::from_str(include_str!("../config.toml")).unwrap();
+            local.service_detection.jarm.enabled = local_enabled;
+            let mut service = serde_json::to_value(&local.service_detection).unwrap();
+            if let Some(enabled) = remote_enabled {
+                service["jarm"]["enabled"] = serde_json::json!(enabled);
+            } else {
+                service.as_object_mut().unwrap().remove("jarm");
+            }
+            let document: RemoteRuntimeConfiguration = serde_json::from_value(serde_json::json!({
+                "masscan":{"rate":1000}, "service_detection":service,
+                "dns":local.dns,"nuclei":local.nuclei
+            }))
+            .unwrap();
+            let manager = RuntimeConfiguration::new(&local);
+            manager
+                .restore(RuntimeConfigurationEnvelope {
+                    revision: 1,
+                    schema_version: 1,
+                    document,
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                manager.snapshot().await.service_detection.jarm.enabled,
+                expected
+            );
+        }
     }
 }
