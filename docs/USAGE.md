@@ -259,3 +259,11 @@ probe_timeout_seconds = 5
 
 完整心跳格式、实现约束和故障排查参见
 [系统维护文档](MAINTENANCE.md#网络协议自动探测)。
+
+## 服务产品识别
+
+服务识别结果的 `service` 仍为 `http`、`https`、`tls`、`ssh` 等应用协议。配套服务端从同一份原始协议证据生成独立的产品列表，既支持 nginx、Apache HTTP Server、OpenSSH 服务声明，也支持 Cobalt Strike、AsyncRAT / DcRAT 的证书产品候选；此过程不查询 IOC 库、不增加探测请求。
+
+扫描器在选中服务握手之后，按 TLS、HTTP、HTTPS 顺序尽量保留每个模块的一份成功补充观察。补充证据总量最多两倍 `service_detection.max_result_bytes`，仍受既有 64 MiB 结果块限制；超预算省略的补充观察通过 `data.product_evidence_truncated=true` 标记。已自包含 TLS 日志的应用握手不重复保存独立 TLS 观察。失败 TLS 中可用的公开证书沿用原有保留策略。原协议名、置信度、探测计划、取消恢复及网页内容富化开关保持原义。
+
+控制台「服务」列同时显示协议与产品。证书规则只形成疑似产品，不确认 C2 服务角色或恶意用途，不自动生成整个 IP 的恶意标签。无需增加节点配置；旧扫描器保留的原始证据仍可使用，具体覆盖范围取决于当时保存的字段。产品查询、存量回填与 API 见[服务端使用说明](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#服务产品识别)。
