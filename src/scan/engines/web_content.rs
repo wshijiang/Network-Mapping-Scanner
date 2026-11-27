@@ -1,5 +1,5 @@
 //! Best-effort concurrent web asset enrichment for identified http/https
-//! endpoints: favicon bytes (hashed server-side), external JS paths + MD5, and
+//! endpoints: favicon bytes (hashed server-side), external JS paths and hashes, and
 //! a conditional landing-page body when the probe hit a redirect or empty body.
 //!
 //! Every fetch is pinned to the scanned IP through a custom DNS resolver, so
@@ -7,6 +7,7 @@
 //! pass is strictly bounded (concurrency, per-fetch timeout, byte caps, block
 //! budget) and never fails the scan: incomplete results keep the base evidence.
 
+use crate::modules::package::digest;
 use crate::scan::ServiceObservation;
 use crate::types::{ServiceDetectionConfig, WebContentConfig};
 use base64::Engine as _;
@@ -480,12 +481,11 @@ async fn fetch_js(
                     Ok((bytes, truncated))
                         if !bytes.is_empty() && !looks_like_html(&bytes, &content_type) =>
                     {
-                        // A prefix MD5 is not the asset's MD5: keep the path
-                        // searchable but never publish a partial hash.
+                        // Keep partial downloads searchable by path only.
                         if truncated {
                             json!({"path": path, "url": full_url, "size": bytes.len(), "status": "truncated"})
                         } else {
-                            json!({"path": path, "url": full_url, "size": bytes.len(), "hash_md5": md5_hex(&bytes), "status": "success"})
+                            json!({"path": path, "url": full_url, "size": bytes.len(), "hash_md5": md5_hex(&bytes), "hash_sha256": digest(&bytes), "status": "success"})
                         }
                     }
                     Ok((_, _)) => json!({"path": path, "url": full_url, "status": "html_response"}),
@@ -1052,6 +1052,10 @@ mod tests {
         assert_eq!(result["favicon"]["size"], json!(png_bytes().len()));
         assert_eq!(result["js"][0]["path"], json!("/app.js"));
         assert_eq!(result["js"][0]["hash_md5"], json!(md5_hex(js)));
+        assert_eq!(
+            result["js"][0]["hash_sha256"],
+            json!("57b43dfc3c26aaf74f190e1dcba9dc34cb03e7686f9aeaad2d22747cae8c76bf")
+        );
         assert_eq!(result["landing"]["status_code"], json!(200));
         assert!(
             result["landing"]["body"]
@@ -1155,6 +1159,7 @@ mod tests {
             entry.get("hash_md5").is_none(),
             "prefix MD5 must not be published"
         );
+        assert!(entry.get("hash_sha256").is_none());
     }
 
     #[tokio::test]
