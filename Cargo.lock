@@ -1178,6 +1178,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
+name = "netfp"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a9f5435c22a651e4eec11a3332b2630f518613421e61897799cade62f24d1d7"
+dependencies = [
+ "rand",
+ "sha2",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1633,6 +1643,7 @@ dependencies = [
  "ipnet",
  "libc",
  "md-5",
+ "netfp",
  "regex",
  "reqwest",
  "ring",

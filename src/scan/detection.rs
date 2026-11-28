@@ -418,12 +418,33 @@ pub(crate) fn aggregate(
             if selected_evidence.is_none() && let Some(item)=evidence.iter().find(|e| matches!(e.module.as_str(),"dot"|"doh") && e.status=="tls-error") {
                 retained_evidence.push(json!({"role":"probe_diagnostic","module":"diagnostic","result":{"probe":item.module,"status":item.status,"error_code":"tls_validation_or_handshake_failed"},"truncated":false}));
             }
-            if selected_evidence.is_some_and(|item| item.module == ProbeKind::Https.name())
-                && let Some(tls) = evidence
-                    .iter()
-                    .find(|item| item.module == ProbeKind::Tls.name() && item.status == "success")
-            {
-                retained_evidence.push(retained_handshake(tls));
+            // Product inference consumes protocol-owned evidence independently of
+            // the winning service name. Keep at most one successful observation
+            // per supplementary protocol, without changing probe planning.
+            let mut supplementary_bytes = 0usize;
+            let mut product_evidence_truncated = false;
+            for module in ["tls", "http", "https"] {
+                // Conflicting application handshakes must not acquire a product
+                // identity from an arbitrarily retained successful probe.
+                if selected_evidence.is_none() {
+                    continue;
+                }
+                if module == "tls" && retained_evidence.iter().any(|item| item.pointer("/result/tls/handshake_log").is_some()) {
+                    continue;
+                }
+                if retained_evidence.iter().any(|item| item["module"] == module) {
+                    continue;
+                }
+                if let Some(item) = evidence.iter().find(|item| item.module == module && item.status == "success") {
+                    let retained = retained_handshake(item);
+                    let bytes = serde_json::to_vec(&retained).map_or(usize::MAX, |value| value.len());
+                    if supplementary_bytes.saturating_add(bytes) <= config.max_result_bytes.saturating_mul(2) {
+                        supplementary_bytes += bytes;
+                        retained_evidence.push(retained);
+                    } else {
+                        product_evidence_truncated = true;
+                    }
+                }
             }
             if !retained_evidence.iter().any(|item| item["module"] == "tls")
                 && let Some(tls) = evidence.iter().find_map(|item| failed_tls_certificate(item))
@@ -435,6 +456,7 @@ pub(crate) fn aggregate(
                 "confidence": selected.map(|candidate| candidate.score).unwrap_or(0),
                 "selected_probe": selected_evidence.map(|item| item.module.as_str()),
                 "attempt_count": evidence.len(),
+                "product_evidence_truncated": product_evidence_truncated,
                 "selection_reason": selected.map(|candidate| candidate.reason),
                 "evidence": retained_evidence,
             });
@@ -835,6 +857,30 @@ mod tests {
     }
 
     #[test]
+    fn failed_mtls_keeps_product_certificate_fields_without_claiming_an_application() {
+        let mut attempt = evidence("tls", 18444, "handshake-error", None);
+        let leaf = json!({"fingerprint_sha256":"d".repeat(64), "subject_dn":"CN=multiplayer", "issuer_dn":"CN=operators",
+            "signature":{"self_signed":false,"signature_algorithm":{"name":"ECDSA-SHA256"}}});
+        attempt.detail = json!({"result":{"handshake_log":{
+            "server_certificates":{"certificate":{"parsed":leaf}},
+            "client_key_exchange":{"private_key":"not-public"}
+        }}});
+        let output = aggregate(&[attempt], &ServiceDetectionConfig::default());
+        assert!(output[0].service.is_none());
+        let retained = &output[0].data.as_ref().unwrap()["evidence"][0];
+        assert_eq!(retained["status"], "handshake-error");
+        assert_eq!(
+            retained["result"]["handshake_log"]["server_certificates"]["certificate"]["parsed"],
+            leaf
+        );
+        assert_eq!(
+            retained["result"]["handshake_completed_successfully"],
+            false
+        );
+        assert!(!retained.to_string().contains("not-public"));
+    }
+
+    #[test]
     fn standard_strategy_keeps_single_port_mapped_probe() {
         let config = ServiceDetectionConfig {
             strategy: ServiceDetectionStrategy::Standard,
@@ -1063,9 +1109,10 @@ mod tests {
                 let retained = result.data.as_ref().unwrap()["evidence"]
                     .as_array()
                     .unwrap();
-                assert_eq!(retained.len(), 2);
+                assert_eq!(retained.len(), 3);
                 assert_eq!(retained[0]["module"], "https");
                 assert_eq!(retained[1]["module"], "tls");
+                assert_eq!(retained[2]["module"], "http");
             }
         }
     }
@@ -1154,6 +1201,28 @@ mod tests {
             );
             assert!(fallback_attempts(&ports, &completed, &probes, &config).is_empty());
         }
+    }
+
+    #[test]
+    fn product_evidence_budget_does_not_replace_the_selected_protocol() {
+        let config = ServiceDetectionConfig {
+            max_result_bytes: 128,
+            ..Default::default()
+        };
+        let mut supplementary = evidence("http", 443, "success", Some("HTTP/1.1 302 Found"));
+        supplementary.detail["result"]["response"]["body"] = json!("x".repeat(1024));
+        let output = aggregate(
+            &[
+                evidence("https", 443, "success", Some("HTTP/1.1 200 OK")),
+                supplementary,
+            ],
+            &config,
+        );
+        assert_eq!(output[0].service.as_deref(), Some("https"));
+        let data = output[0].data.as_ref().unwrap();
+        assert_eq!(data["evidence"].as_array().unwrap().len(), 1);
+        assert_eq!(data["selected_probe"], "https");
+        assert_eq!(data["product_evidence_truncated"], true);
     }
 
     #[test]

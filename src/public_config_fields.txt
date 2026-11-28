@@ -46,6 +46,10 @@ scanner.verify_tls
 service_detection.confidence_threshold
 service_detection.connect_timeout_seconds
 service_detection.enabled
+service_detection.jarm.concurrency
+service_detection.jarm.enabled
+service_detection.jarm.max_stage_seconds
+service_detection.jarm.probe_timeout_seconds
 service_detection.max_probes_per_endpoint
 service_detection.max_result_bytes
 service_detection.required

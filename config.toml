@@ -42,6 +42,14 @@ target_timeout_seconds = 15
 # Maximum structured zgrab2 detail retained per service result.
 max_result_bytes = 65536
 
+# Optional active TLS fingerprinting: 10 extra connections per observed TLS endpoint.
+# Local and remote configuration must both allow collection.
+[service_detection.jarm]
+enabled = false
+concurrency = 4
+probe_timeout_seconds = 3
+max_stage_seconds = 60
+
 # Optional concurrent web asset enrichment for identified http/https endpoints:
 # favicon bytes (MD5-hashed server-side), external JS paths + MD5, and a
 # conditional landing-page body when the probe hit a redirect or empty body.

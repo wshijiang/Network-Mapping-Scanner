@@ -254,6 +254,16 @@ pub(crate) async fn run_with_journal(
             services.extend(block);
             return Ok(EngineOutcome::Partial(services, reason.into()));
         }
+        let jarm_bytes = super::jarm::enrich_block(
+            config,
+            &mut block,
+            deadline,
+            cancel_requested,
+            &mut pacing,
+            (64usize * 1024 * 1024).saturating_sub(service_bytes),
+        )
+        .await;
+        service_bytes = service_bytes.saturating_add(jarm_bytes);
         // Best-effort web asset enrichment before the block is journaled, so
         // recovery never re-fetches and uploaded evidence already carries it.
         let added_bytes = super::web_content::enrich_block(

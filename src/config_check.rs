@@ -187,9 +187,11 @@ fn sensitive(path: &str) -> bool {
 
 fn source_for(field: &str) -> &'static str {
     match field {
-        "service_detection.enabled" | "dns.enabled" | "nuclei.enabled" | "scanner.rate" => {
-            "local_limit"
-        }
+        "service_detection.enabled"
+        | "service_detection.jarm.enabled"
+        | "dns.enabled"
+        | "nuclei.enabled"
+        | "scanner.rate" => "local_limit",
         "service_detection.zgrab_path"
         | "service_detection.required"
         | "nuclei.path"

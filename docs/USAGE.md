@@ -259,3 +259,77 @@ probe_timeout_seconds = 5
 
 完整心跳格式、实现约束和故障排查参见
 [系统维护文档](MAINTENANCE.md#网络协议自动探测)。
+
+## 服务产品识别
+
+扫描器继续上传 `http`、`https`、`tls`、`ssh` 等既有 `service` 协议结果及其原始观察。已有 Web 技术栈和旧 C2 指纹结果继续由配套服务端处理；本次为同一端点的已执行探测保留有预算的补充观察，供服务端生成通用的 `products[]` 与 `product_identification`。
+
+扫描器负责采集和上传，产品匹配由服务端完成。服务端规则支持 nginx、Apache HTTP Server、OpenSSH 软件声明，Cobalt Strike、AsyncRAT / DcRAT、Sliver 和 QakBot 证书候选，以及 Mythic Web UI 和 Empire / Starkiller 管理页候选。管理页规则复用已保存的 HTTP/HTTPS 正文和符合规则条件的 `web_assets` 同源落地页。[服务端产品表](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#当前支持与判断范围)
+
+扫描器在选中服务握手之后，按 TLS、HTTP、HTTPS 顺序尽量保留每个模块的一份成功补充观察。补充证据总量最多两倍 `service_detection.max_result_bytes`，仍受既有 64 MiB 结果块限制；超预算省略的补充观察通过 `data.product_evidence_truncated=true` 标记。已自包含 TLS 日志的应用握手不重复保存独立 TLS 观察。失败 TLS 中可用的公开证书沿用原有保留策略。原协议名、置信度、探测计划、取消恢复及网页内容富化开关保持原义。
+
+控制台「服务」列同时显示协议与产品。证书和管理页规则产生端口级「疑似」候选。服务端规则可直接使用旧扫描器已保存的字段，无需调整节点配置或增加探测请求。额外的 JARM 连接由独立配置控制。[产品查询与存量回填](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#服务产品识别)
+
+规则 v6 起，可在服务端配置外部 JSON 规则包。基于已有观察字段添加规则时，扫描器继续按同一格式上传证据。[服务端规则包](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PRODUCT_RULES.md)
+
+### Sliver 与 QakBot 产品候选
+
+Sliver 与 QakBot 候选从服务端产品规则 v2 起支持（当前规则修订见配套服务端文档），复用本节描述的 TLS/HTTPS 公开证书，不需要增加节点参数、端口选择或请求。Sliver 的首批范围是默认 Multiplayer 多人管理端证书，不等于通用 mTLS 或植入体监听器识别。握手后续失败时，可用的叶证书字段沿用原有保留链路，协议选择仍可保持未知，不能把证书候选当作成功应用握手。
+
+QakBot 基于公开研究中的历史证书主体/颁发者组合，结果为需复核的历史启发式候选。字段缺失、被裁剪、出现在证书链或 HTTPS 跳转目的站时不能据此归属源端口；不发送家族专属通信，也不依据端口号或空响应猜测家族。旧扫描器只要保存了所需字段即可使用新版服务端规则；已有数据进入产品搜索的方法见[服务端使用说明](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#sliver-与-qakbot-的候选边界)。
+
+
+## 检测方式与 JARM 主动采集
+
+| 检测方式 | 是否主动探测 | 基本原理 | 当前用途 |
+| --- | --- | --- | --- |
+| JARM | 是，显式启用后额外最多 10 次 TCP 连接与 ClientHello 探测 | 对 10 组不同 ClientHello 的服务端密码套件、TLS 版本、ALPN 与扩展响应生成 62 个十六进制字符的指纹 | 保存 TLS 配置指纹；当前没有以 JARM 单独归属 C2 家族的规则 |
+| TLS Certificate | 证书采集是；分析复用已有观察，无额外连接 | 分析叶证书主题、颁发者、有效期、公钥等元数据 | Cobalt Strike、AsyncRAT / DcRAT、Sliver、QakBot 候选，适用[服务端规则边界](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#sliver-与-qakbot-的候选边界) |
+| HTTP Fingerprint | HTTP 采集是；产品规则复用已有响应 | 分析 HTTP 状态、响应头和内容特征 | nginx / Apache 的 Server 声明，以及 Mythic / Empire 管理页候选 |
+| Protocol Fingerprint | 通常是；已有工业被动接收方式除外，识别复用已有握手 | 根据应用层握手和协议响应识别服务 | 既有协议识别及 OpenSSH 软件声明；不表示已实现各 C2 的私有协议规则 |
+
+在扫描器本地 `config.toml` 中明确允许 JARM：
+
+```toml
+[service_detection.jarm]
+enabled = true
+concurrency = 4
+probe_timeout_seconds = 3
+max_stage_seconds = 60
+```
+
+再在控制台「扫描器 → 配置 → JARM 主动采集」启用该扫描器的远程开关。服务识别本身也需启用。JARM 本地和服务端默认均为关闭，远程开启不能覆盖本地禁用；旧服务端未下发该段时保留本地配置。配置在下一任务快照生效。模块模式需要同步更新 service-detection worker，旧 worker 不具备 JARM 采集能力。
+
+参数范围：`concurrency` 1–32、`probe_timeout_seconds` 1–30 秒、`max_stage_seconds` 1–3600 秒。并发以端点计，完整指纹需要 10 个按原始顺序的探测槽；每槽新建 TCP 连接并发送一组 ClientHello，最多尝试一次，不完成应用会话，无重试。预算或取消可使实际执行少于 10 槽；沿用 `server_rate_limit` 的每 IP 连接间隔。每连接最多读取 64 KiB，仅解析 ServerHello/拒绝响应，不发送应用层请求；同时受块级总预算、任务剩余预算、取消信号及 64 MiB 结果上限约束。
+
+只对本次已有 TLS ServerHello 或证书证据的 TCP 端点采集（包括保留服务端证书的失败 mTLS 握手），不按端口号猜测，不跟随 HTTPS 跳转目的站。连接固定到扫描 IP 与端口；任务 `probe_options.server_name` 仅作为经过校验的 SNI，无此项时使用扫描 IP 文本，不执行额外 DNS 解析。
+
+成功指纹要求 10 个槽都取得可判定结果，且至少一个槽取得 ServerHello；这不要求 10 次成功或完整的 TLS 握手。显式 TLS 拒绝或尚未收到任何字节时的正常关闭记为空槽；超时、连接异常、截断、畸形或超限响应标为不完整，不生成有效哈希。全部拒绝显示 `no_response`，不发布全零指纹。块级超时或取消会丢弃尚在执行的端点采集，保留基础服务证据和已完成端点；采集失败不会使基础扫描失败。JARM 与单次 ServerHello 的 JA3S 不同，共享指纹只说明 TLS 配置相似，不能单独确认家族或恶意用途。
+
+API 字段位置如下：
+
+- `product_identification.detection_methods[]`：`id`（`jarm` / `tls_certificate` / `http_fingerprint` / `protocol_fingerprint`）、`name`、`active_probe`（采集是否需要主动网络交互）、`additional_probe`（该方式是否需要额外连接）、`observed`（该次观察是否有此类记录；仅被动协议证据时 `active_probe=false`）、`principle`（稳定原理键）。`active_probe` / `additional_probe` 描述采集方式，不代表本次已实际执行。`observed=true` 表示有相应记录，JARM 记录可能只有部分结果；是否得到指纹仍需看 `jarm.status` 与 `fingerprint`。方式清单不代表四类方式均有 C2 产品规则或均已采集成功。
+- `product_identification.jarm`：没有可展示记录时为 `null`，可能是未启用、没有符合条件的端点、取消/预算不足导致记录未保留，或记录未通过格式校验；不能仅凭 `null` 判断从未尝试过连接。存在记录时包含 `status`（`success` / `partial` / `no_response`）、`fingerprint`（不完整或全部拒绝为 `null`）、`expected_probes`、`attempted_probes`、`completed_probes`、`sni`、`field_path`。`attempted_probes` 是已尝试槽数，`completed_probes` 是可判定槽数，包括 ServerHello、明确 TLS 拒绝及未收到任何字节时的正常关闭，不等同于成功 ServerHello 数或完成 TLS 会话数。
+- `products[].evidence[].detection_method` 标明产品规则使用的方式。新字段缺省兼容旧数据，不把历史观察标成已完成 JARM。
+
+搜索、端口当前与历史 API 沿用产品观察时钟携带这些元数据；JARM 不创建虚构产品或自动恶意标签，也未增加 JARM DSL 过滤字段。只有新扫描能获取新 JARM；重放旧数据不会主动连接网络。
+
+实现使用固定版本 [netfp 0.2.1](https://docs.rs/netfp/0.2.1/netfp/) 的纯编解码与哈希组件，网络、速率及预算由扫描器控制。算法说明见 [Salesforce JARM](https://github.com/salesforce/jarm)。回归仅使用本地合成 TLS 响应，未探测外部 C2，也不代表已完成各类真实部署验证。
+
+
+### 通过 Web 或服务器 CLI 管理 JARM
+
+Web 入口为「扫描器 → 配置 → JARM 主动采集」，可修改 `enabled`、`concurrency`、`probe_timeout_seconds`、`max_stage_seconds`。管理员通过已有 `GET/PUT /api/scanner/{scanner_id}/configuration` 读写完整运行配置，发布请求需携带 `expectedRevision`；旧版本或并发更新发生冲突时重新加载后再发布。节点本地授权和下一任务边界生效规则不变。
+
+服务器 CLI 读写同一份配置，无需运行 HTTP 或 Elasticsearch，仅需正确的 PostgreSQL 连接配置：
+
+```bash
+# 使用实际扫描器 UUID 替换 <ID>；可在命令前指定 --config /path/to/config.toml。
+network_mapping_server scanner-config show <ID>
+network_mapping_server scanner-config set-jarm <ID> --enabled true --concurrency 4 --probe-timeout-seconds 3 --max-stage-seconds 60 --change-reason "授权资产盘点"
+network_mapping_server scanner-config set-jarm <ID> --enabled false --change-reason "暂停额外 TLS 握手"
+```
+
+`set-jarm` 仅修改给出的字段，保留其他 JARM 参数和网页抓取、端口扫描等配置；不传任何修改字段会报错。参数范围与 Web 相同，`--enabled` 必须显式传 `true` 或 `false`，变更原因最多 500 个字符。每次成功更新都在同一事务中写入新修订、历史与审计；如果 Web 或另一个 CLI 已先修改配置，则报修订冲突并退出，不覆盖并发更新。`show` 可核对当前文档和修订；现有 `set-web-content` 命令继续可用。
+
+两种入口均只能管理服务端运行配置，不能越过扫描节点本地 `service_detection.enabled` / `service_detection.jarm.enabled` 授权。旧 worker 需同步升级后才能实际采集 JARM。
