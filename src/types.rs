@@ -465,6 +465,8 @@ pub(crate) struct ServiceDetectionConfig {
     /// body) for identified http/https endpoints. Enabled by default; failures
     /// degrade to the base probe evidence and never fail the scan.
     pub(crate) web_content: WebContentConfig,
+    /// Local opt-in for read-only XMRig summaries on identified web endpoints.
+    pub(crate) xmrig_summary: bool,
     /// Additional TLS handshakes require explicit local opt-in.
     pub(crate) jarm: JarmConfig,
 }
@@ -612,6 +614,7 @@ impl Default for ServiceDetectionConfig {
             target_timeout_seconds: 15,
             max_result_bytes: 65_536,
             web_content: WebContentConfig::default(),
+            xmrig_summary: false,
             jarm: JarmConfig::default(),
         }
     }

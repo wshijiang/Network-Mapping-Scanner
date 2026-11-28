@@ -66,5 +66,6 @@ service_detection.web_content.max_js_bytes
 service_detection.web_content.max_js_files
 service_detection.web_content.max_redirects
 service_detection.web_content.max_stage_seconds
+service_detection.xmrig_summary
 service_detection.zgrab_path
 upload.endpoint

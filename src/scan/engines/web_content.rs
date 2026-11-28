@@ -552,6 +552,78 @@ async fn fetch_landing(
     Some(landing)
 }
 
+async fn fetch_xmrig_summary(
+    client: &reqwest::Client,
+    sem: &Semaphore,
+    base: &reqwest::Url,
+    deadline: Instant,
+) -> Option<Value> {
+    let _permit = sem.acquire().await.ok()?;
+    if Instant::now() >= deadline {
+        return None;
+    }
+
+    let url = base.join("/2/summary").ok()?;
+    let response = client
+        .get(url)
+        .header("accept", "application/json")
+        .header("accept-encoding", "identity")
+        .send()
+        .await
+        .ok()?;
+    if response.status() != reqwest::StatusCode::OK {
+        return None;
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)?
+        .to_str()
+        .ok()?;
+    if !content_type
+        .split(';')
+        .next()?
+        .trim()
+        .eq_ignore_ascii_case("application/json")
+    {
+        return None;
+    }
+    let (body, _) = read_bounded(response, 64 * 1024, false).await.ok()?;
+    let value: Value = serde_json::from_slice(&body).ok()?;
+    let version = value["version"]
+        .as_str()
+        .filter(|value| value.len() <= 32)?;
+    let agent = value["ua"].as_str()?.split_whitespace().next()?;
+    let (name, declared_version) = agent.split_once('/')?;
+    if value["kind"] != "miner"
+        || !name.eq_ignore_ascii_case("xmrig")
+        || declared_version != version
+    {
+        return None;
+    }
+    let rates = value.pointer("/hashrate/total")?.as_array()?;
+    if rates.len() != 3
+        || !rates
+            .iter()
+            .all(|value| value.is_null() || value.is_number())
+    {
+        return None;
+    }
+    let algorithm = value["algorithms"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|name| !name.is_empty() && name.len() <= 64)?;
+    let summary = json!({
+        "kind": "miner", "version": version, "ua": agent,
+        "paused": value["paused"].as_bool()?, "algorithms": [algorithm],
+        "hashrate": {"total": rates}
+    });
+    Some(json!({
+        "status_code": 200, "headers": {"content_type": "application/json"},
+        "body": serde_json::to_string(&summary).ok()?
+    }))
+}
+
 async fn enrich_service(
     config: &ServiceDetectionConfig,
     service: &ServiceObservation,
@@ -566,6 +638,11 @@ async fn enrich_service(
     let mut body = body.unwrap_or_default();
 
     let mut result = serde_json::Map::new();
+    if config.xmrig_summary
+        && let Some(summary) = fetch_xmrig_summary(&client, &sem, &base, deadline).await
+    {
+        result.insert("xmrig_summary".into(), summary);
+    }
     // A redirect or empty probe body means the real page was never captured:
     // re-fetch "/" first and extract favicon/JS references from the landing HTML.
     let needs_landing =
@@ -1000,6 +1077,84 @@ mod tests {
         config.web_content.max_stage_seconds = 15;
         config.connect_timeout_seconds = 2;
         config
+    }
+
+    #[tokio::test]
+    async fn xmrig_collects_only_when_enabled_and_never_follows_redirects() {
+        let body = json!({
+            "kind":"miner","version":"6.24.0","ua":"XMRig/6.24.0 (fixture)",
+            "paused":false,"algorithms":["rx/0"],"hashrate":{"total":[1,null,null]},
+            "worker_id":"do-not-retain"
+        });
+        let (addr, server) = local_server(vec![(
+            "/2/summary".into(),
+            200,
+            "application/json".into(),
+            serde_json::to_vec(&body).unwrap(),
+        )])
+        .await;
+        let mut service = service_with_body("<html>fixture</html>", 200);
+        service.ip = addr.ip().to_string();
+        service.port = addr.port();
+        let mut config = config_for();
+        for enabled in [false, true] {
+            config.xmrig_summary = enabled;
+            let mut observations = [service.clone()];
+            enrich_block(
+                &config,
+                &mut observations,
+                Instant::now() + Duration::from_secs(8),
+                &AtomicBool::new(false),
+                64 * 1024,
+            )
+            .await;
+            let evidence = observations[0].data.as_ref().unwrap()["evidence"]
+                .as_array()
+                .unwrap();
+            let summary = evidence
+                .iter()
+                .find_map(|item| item.pointer("/result/xmrig_summary"));
+            assert_eq!(summary.is_some(), enabled);
+            if let Some(summary) = summary {
+                let saved: Value = serde_json::from_str(summary["body"].as_str().unwrap()).unwrap();
+                assert_eq!(saved["ua"], "XMRig/6.24.0");
+                assert!(saved.get("worker_id").is_none());
+            }
+        }
+        server.abort();
+
+        let (addr, redirect) = local_server_with_location(
+            vec![
+                ("/2/summary".into(), 302, "text/html".into(), Vec::new()),
+                (
+                    "/destination".into(),
+                    200,
+                    "application/json".into(),
+                    serde_json::to_vec(&body).unwrap(),
+                ),
+            ],
+            "/destination".into(),
+        )
+        .await;
+        service.port = addr.port();
+        let mut observations = [service];
+        enrich_block(
+            &config,
+            &mut observations,
+            Instant::now() + Duration::from_secs(8),
+            &AtomicBool::new(false),
+            64 * 1024,
+        )
+        .await;
+        let evidence = observations[0].data.as_ref().unwrap()["evidence"]
+            .as_array()
+            .unwrap();
+        assert!(
+            evidence
+                .iter()
+                .all(|item| item.pointer("/result/xmrig_summary").is_none())
+        );
+        redirect.abort();
     }
 
     #[tokio::test]
