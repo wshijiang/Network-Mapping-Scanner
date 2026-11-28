@@ -13,10 +13,11 @@ use base64::Engine as _;
 use md5::{Digest, Md5};
 use regex::Regex;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 use tokio::time::{Duration, Instant};
 
 const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (compatible; NetworkMappingScanner/1.0)";
@@ -178,7 +179,7 @@ fn endpoint_base_url(service: &ServiceObservation) -> Option<reqwest::Url> {
 
 /// Body and status code of the http/https probe evidence, preferring the module
 /// matching the identified service.
-fn probe_body_and_status(service: &ServiceObservation) -> (Option<String>, Option<u16>) {
+fn probe_body_and_status(service: &ServiceObservation) -> (Option<&str>, Option<u16>) {
     let Some(evidence) = service
         .data
         .as_ref()
@@ -196,8 +197,7 @@ fn probe_body_and_status(service: &ServiceObservation) -> (Option<String>, Optio
         let response = item.pointer("/result/response");
         let body = response
             .and_then(|response| response.get("body"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+            .and_then(Value::as_str);
         let status = response
             .and_then(|response| response.get("status_code"))
             .and_then(Value::as_u64)
@@ -242,19 +242,24 @@ fn looks_like_image(bytes: &[u8], content_type: &str) -> bool {
         || (head.starts_with("<?xml") && head.contains("<svg"))
 }
 
+enum BodyError {
+    Read(reqwest::Error),
+    Limit,
+}
+
 /// Stream a response body up to `limit` bytes. `truncate` keeps the prefix for
 /// JS/body captures; favicon fetches reject oversized responses instead.
 async fn read_bounded(
     mut response: reqwest::Response,
     limit: usize,
     truncate: bool,
-) -> Result<(Vec<u8>, bool), ()> {
+) -> Result<(Vec<u8>, bool), BodyError> {
     let mut bytes: Vec<u8> = Vec::new();
     let mut truncated = false;
-    while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
+    while let Some(chunk) = response.chunk().await.map_err(BodyError::Read)? {
         if bytes.len() + chunk.len() > limit {
             if !truncate {
-                return Err(());
+                return Err(BodyError::Limit);
             }
             bytes.extend_from_slice(&chunk[..limit - bytes.len()]);
             truncated = true;
@@ -387,7 +392,7 @@ async fn fetch_favicon(
     {
         urls.push(fallback);
     }
-    let endpoint_port = base.port().unwrap_or(80);
+    let endpoint_port = base.port_or_known_default().unwrap_or(80);
     for url in urls {
         if Instant::now() >= deadline {
             return None;
@@ -457,7 +462,7 @@ async fn fetch_js(
     deadline: Instant,
 ) -> (Vec<Value>, bool) {
     let truncated = urls.len() > web.max_js_files;
-    let endpoint_port = base.port().unwrap_or(80);
+    let endpoint_port = base.port_or_known_default().unwrap_or(80);
     let mut results = Vec::new();
     for url in urls.iter().take(web.max_js_files) {
         if Instant::now() >= deadline {
@@ -489,7 +494,7 @@ async fn fetch_js(
                         }
                     }
                     Ok((_, _)) => json!({"path": path, "url": full_url, "status": "html_response"}),
-                    Err(()) => json!({"path": path, "url": full_url, "status": "error"}),
+                    Err(_) => json!({"path": path, "url": full_url, "status": "error"}),
                 }
             }
             Ok((response, _)) => {
@@ -513,7 +518,7 @@ async fn fetch_landing(
         return None;
     }
     let _permit = sem.acquire().await.ok()?;
-    let endpoint_port = base.port().unwrap_or(80);
+    let endpoint_port = base.port_or_known_default().unwrap_or(80);
     let (response, chain) = send_pinned(
         client,
         base,
@@ -552,26 +557,198 @@ async fn fetch_landing(
     Some(landing)
 }
 
-async fn enrich_service(
-    config: &ServiceDetectionConfig,
-    service: &ServiceObservation,
-    sem: Arc<Semaphore>,
+struct SummaryProbe {
+    status: &'static str,
+    status_code: Option<u16>,
+    response: Option<Value>,
+    host: Option<String>,
+    queue_ms: u64,
+    request_ms: u64,
+}
+
+enum SummaryProgress {
+    Started { at: Instant, host: Option<String> },
+    Finished(SummaryProbe),
+}
+
+impl SummaryProbe {
+    fn not_attempted() -> Self {
+        Self {
+            status: "not_attempted",
+            status_code: None,
+            response: None,
+            host: None,
+            queue_ms: 0,
+            request_ms: 0,
+        }
+    }
+
+    fn metadata(&self) -> Value {
+        json!({"status": self.status, "status_code": self.status_code, "host": self.host})
+    }
+}
+
+fn request_error(error: reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else {
+        "transport_error"
+    }
+}
+
+fn summary_base(mut base: reqwest::Url, server_name: Option<&str>) -> reqwest::Url {
+    if let Some(name) = server_name {
+        let mut named = base.clone();
+        // IP literals bypass the pinned resolver. Only a DNS name may replace
+        // the original URL host, with the resolver still pointing at the IP.
+        if named.set_host(Some(name)).is_ok() && named.domain().is_some() {
+            base = named;
+        }
+    }
+    base
+}
+
+fn sanitize_miner_summary(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let version = value["version"].as_str()?;
+    let agent = value["ua"].as_str()?.split_whitespace().next()?;
+    let (name, declared_version) = agent.split_once('/')?;
+    let mut parts = version.split('.');
+    if value["kind"] != "miner"
+        || declared_version != version
+        || name.is_empty()
+        || name.len() > 32
+        || !name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+        || version.len() > 32
+        || !(0..3).all(|_| {
+            parts
+                .next()
+                .is_some_and(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()))
+        })
+        || parts.next().is_some()
+    {
+        return None;
+    }
+    let rates = value.pointer("/hashrate/total")?.as_array()?;
+    if rates.len() != 3
+        || !rates
+            .iter()
+            .all(|rate| rate.is_null() || rate.as_f64().is_some_and(|n| n >= 0.0))
+    {
+        return None;
+    }
+    let algorithm = value["algorithms"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|name| !name.is_empty() && name.len() <= 64)?;
+    serde_json::to_string(&json!({
+        "kind": "miner", "version": version, "ua": agent,
+        "paused": value["paused"].as_bool()?, "algorithms": [algorithm],
+        "hashrate": {"total": rates}
+    }))
+    .ok()
+}
+
+async fn fetch_xmrig_summary(
+    client: &reqwest::Client,
+    sem: &Semaphore,
+    base: &reqwest::Url,
+    deadline: Instant,
+    queued_at: Instant,
+    progress: (usize, &mpsc::Sender<(usize, SummaryProgress)>),
+) -> SummaryProbe {
+    let mut result = SummaryProbe::not_attempted();
+    result.host = base.domain().map(str::to_owned);
+    let Ok(Ok(_permit)) = tokio::time::timeout_at(deadline, sem.acquire()).await else {
+        return result;
+    };
+    if Instant::now() >= deadline {
+        return result;
+    }
+    let started = Instant::now();
+    result.queue_ms = started.duration_since(queued_at).as_millis() as u64;
+    let _ = progress
+        .1
+        .send((
+            progress.0,
+            SummaryProgress::Started {
+                at: started,
+                host: result.host.clone(),
+            },
+        ))
+        .await;
+    let mut status_code = None;
+    let outcome = tokio::time::timeout_at(deadline, async {
+        let url = base.join("/2/summary").map_err(|_| "invalid_response")?;
+        let response = client
+            .get(url)
+            .header("accept", "application/json")
+            .header("accept-encoding", "identity")
+            .send()
+            .await
+            .map_err(request_error)?;
+        let code = response.status().as_u16();
+        status_code = Some(code);
+        match code {
+            200 => {}
+            401 | 403 => return Err("auth_required"),
+            404 | 410 => return Err("no_summary"),
+            _ => return Err("http_error"),
+        }
+        let json = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json"));
+        if !json {
+            return Err("invalid_response");
+        }
+        let (body, _) =
+            read_bounded(response, 64 * 1024, false)
+                .await
+                .map_err(|error| match error {
+                    BodyError::Limit => "response_too_large",
+                    BodyError::Read(error) => request_error(error),
+                })?;
+        sanitize_miner_summary(&body).ok_or("invalid_response")
+    })
+    .await;
+    result.status_code = status_code;
+    result.request_ms = started.elapsed().as_millis() as u64;
+    match outcome {
+        Ok(Ok(body)) => {
+            result.status = "success";
+            result.response = Some(json!({
+                "status_code": 200, "headers": {"content_type": "application/json"},
+                "body": body,
+                "request": {"host": result.host}
+            }));
+        }
+        Ok(Err(status)) => result.status = status,
+        Err(_) => result.status = "timeout",
+    }
+    result
+}
+
+async fn enrich_assets(
+    web: &WebContentConfig,
+    client: &reqwest::Client,
+    base: &reqwest::Url,
+    sem: &Semaphore,
+    mut body: String,
+    status: Option<u16>,
     deadline: Instant,
 ) -> Option<Value> {
-    let web = &config.web_content;
-    let base = endpoint_base_url(service)?;
-    let ip: IpAddr = service.ip.parse().ok()?;
-    let client = build_client(config, web, SocketAddr::new(ip, 0))?;
-    let (body, status) = probe_body_and_status(service);
-    let mut body = body.unwrap_or_default();
-
     let mut result = serde_json::Map::new();
     // A redirect or empty probe body means the real page was never captured:
     // re-fetch "/" first and extract favicon/JS references from the landing HTML.
     let needs_landing =
         status.is_some_and(|code| (300..400).contains(&code)) || body.trim().is_empty();
-    if needs_landing && let Some(landing) = fetch_landing(&client, web, &sem, &base, deadline).await
-    {
+    if needs_landing && let Some(landing) = fetch_landing(client, web, sem, base, deadline).await {
         if let Some(landing_body) = landing.get("body").and_then(Value::as_str)
             && !landing_body.trim().is_empty()
         {
@@ -579,13 +756,13 @@ async fn enrich_service(
         }
         result.insert("landing".into(), landing);
     }
-    let candidates = favicon_candidates(&body, &base);
-    if let Some(favicon) = fetch_favicon(&client, web, &sem, &base, &candidates, deadline).await {
+    let candidates = favicon_candidates(&body, base);
+    if let Some(favicon) = fetch_favicon(client, web, sem, base, &candidates, deadline).await {
         result.insert("favicon".into(), favicon);
     }
-    let scripts = script_sources(&body, &base);
+    let scripts = script_sources(&body, base);
     if !scripts.is_empty() {
-        let (js, js_truncated) = fetch_js(&client, web, &sem, &base, &scripts, deadline).await;
+        let (js, js_truncated) = fetch_js(client, web, sem, base, &scripts, deadline).await;
         if !js.is_empty() {
             result.insert("js".into(), Value::Array(js));
         }
@@ -594,19 +771,44 @@ async fn enrich_service(
     (!result.is_empty()).then_some(Value::Object(result))
 }
 
-fn attach_web_assets(service: &mut ServiceObservation, result: Value) {
-    let item = json!({"module": "web_assets", "status": "success", "result": result});
-    let data = service
-        .data
-        .get_or_insert_with(|| json!({"schema_version": 2, "evidence": []}));
-    if let Some(evidence) = data.get_mut("evidence").and_then(Value::as_array_mut) {
-        evidence.push(item);
-    }
+fn web_assets_item(result: Value) -> Value {
+    json!({"module": "web_assets", "status": "success", "result": result})
 }
 
-/// Enrich one service-detection block in place. Returns the serialized bytes
-/// added so the caller can keep the block under the result-size limit. Never
-/// errors: cancellation, deadlines and fetch failures only shrink the output.
+fn service_data_mut(service: &mut ServiceObservation) -> &mut Value {
+    service
+        .data
+        .get_or_insert_with(|| json!({"schema_version": 2, "evidence": []}))
+}
+
+fn attach_web_assets(service: &mut ServiceObservation, result: Value) -> bool {
+    let Some(evidence) = service_data_mut(service)
+        .get_mut("evidence")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+    if let Some(existing) = evidence
+        .iter_mut()
+        .find(|item| item["module"] == "web_assets")
+        .and_then(|item| item["result"].as_object_mut())
+        && let Value::Object(fields) = result
+    {
+        existing.extend(fields);
+        return true;
+    }
+    evidence.push(web_assets_item(result));
+    true
+}
+
+fn asset_cost(result: &Value) -> usize {
+    // Account for the delimiter in the enclosing evidence array.
+    const ENVELOPE: usize = br#"{"module":"web_assets","status":"success","result":},"#.len();
+    serde_json::to_vec(result).map_or(usize::MAX, |bytes| bytes.len() + ENVELOPE)
+}
+
+/// Enrich one service-detection block within the shared request and byte budgets.
+/// Summaries enter the result queue as soon as their own request finishes.
 pub(crate) async fn enrich_block(
     config: &ServiceDetectionConfig,
     services: &mut [ServiceObservation],
@@ -620,67 +822,191 @@ pub(crate) async fn enrich_block(
     }
     let started = Instant::now();
     let deadline = stage_deadline.min(started + Duration::from_secs(web.max_stage_seconds));
-    let sem = Arc::new(Semaphore::new(web.concurrency.max(1)));
-    let mut set = tokio::task::JoinSet::new();
-    for (index, service) in services.iter().enumerate() {
-        if !is_web(service) || has_web_assets(service) {
-            continue;
-        }
-        let config = config.clone();
-        let service = service.clone();
-        let sem = sem.clone();
+    let concurrency = web.concurrency.max(1);
+    let sem = Arc::new(Semaphore::new(concurrency));
+    let (summary_tx, mut summary_rx) = mpsc::channel(concurrency * 2);
+    let eligible: Vec<_> = services
+        .iter()
+        .enumerate()
+        .filter_map(|(index, service)| {
+            (is_web(service) && !has_web_assets(service)).then_some(index)
+        })
+        .collect();
+    let config = Arc::new(config.clone());
+    let spawn = |set: &mut tokio::task::JoinSet<_>, index, service: &ServiceObservation| {
+        let base = endpoint_base_url(service);
+        let ip = service.ip.parse::<IpAddr>().ok();
+        let (body, status) = probe_body_and_status(service);
+        let body = body.unwrap_or_default().to_owned();
+        let sem = Arc::clone(&sem);
+        let config = Arc::clone(&config);
+        let summary_tx = summary_tx.clone();
         set.spawn(async move {
-            (
-                index,
-                enrich_service(&config, &service, sem, deadline).await,
-            )
+            let (Some(base), Some(ip)) = (base, ip) else {
+                return (index, None);
+            };
+            let web = &config.web_content;
+            let Some(client) = build_client(&config, web, SocketAddr::new(ip, 0)) else {
+                return (index, None);
+            };
+            let summary = async {
+                if config.xmrig_summary {
+                    let base =
+                        summary_base(base.clone(), config.probe_options.server_name.as_deref());
+                    let outcome = fetch_xmrig_summary(
+                        &client,
+                        &sem,
+                        &base,
+                        deadline,
+                        started,
+                        (index, &summary_tx),
+                    )
+                    .await;
+                    let _ = summary_tx
+                        .send((index, SummaryProgress::Finished(outcome)))
+                        .await;
+                }
+            };
+            let (_, assets) = tokio::join!(
+                summary,
+                enrich_assets(web, &client, &base, &sem, body, status, deadline)
+            );
+            (index, assets)
         });
+    };
+    let mut waiting = eligible.iter().copied();
+    let mut set = tokio::task::JoinSet::new();
+    for index in waiting.by_ref().take(concurrency) {
+        spawn(&mut set, index, &services[index]);
     }
     if set.is_empty() {
         return 0;
     }
-    let mut added = 0usize;
-    let mut enriched = 0usize;
+
+    let mut summary_progress = BTreeMap::new();
+    let mut assets = Vec::new();
+    let mut asset_bytes = 0usize;
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let expired = tokio::time::sleep_until(deadline);
+    tokio::pin!(expired);
+    let mut keep_assets = |joined| {
+        if let Ok((index, Some(result))) = joined {
+            let bytes = asset_cost(&result);
+            if asset_bytes.saturating_add(bytes) <= byte_budget {
+                assets.push((index, result, bytes));
+                asset_bytes += bytes;
+            }
+        }
+    };
     let aborted = loop {
         tokio::select! {
-            joined = set.join_next() => {
-                match joined {
-                    Some(Ok((index, Some(result)))) => {
-                        let item = json!({"module": "web_assets", "status": "success", "result": result});
-                        let bytes = serde_json::to_vec(&item).map(|value| value.len()).unwrap_or(0);
-                        if added.saturating_add(bytes) <= byte_budget {
-                            attach_web_assets(&mut services[index], item["result"].clone());
-                            added += bytes;
-                            enriched += 1;
-                        }
-                    }
-                    Some(Ok((_, None))) => {}
-                    Some(Err(_)) => {}
-                    None => break false,
+            biased;
+            Some((index, progress)) = summary_rx.recv() => {
+                summary_progress.insert(index, progress);
+            }
+            _ = &mut expired => break true,
+            _ = ticker.tick() => {
+                if cancel_requested.load(Ordering::Relaxed) {
+                    break true;
                 }
             }
-            _ = ticker.tick() => {
-                if cancel_requested.load(Ordering::Relaxed) || Instant::now() >= deadline {
-                    set.abort_all();
-                    break true;
+            joined = set.join_next() => {
+                let Some(joined) = joined else { break false };
+                keep_assets(joined);
+                if let Some(index) = waiting.next() {
+                    spawn(&mut set, index, &services[index]);
                 }
             }
         }
     };
-    // Keep results that finished before the abort; aborted tasks yield Err.
+    set.abort_all();
     while let Some(joined) = set.join_next().await {
-        if let Ok((index, Some(result))) = joined {
-            let item = json!({"module": "web_assets", "status": "success", "result": result});
-            let bytes = serde_json::to_vec(&item)
-                .map(|value| value.len())
-                .unwrap_or(0);
-            if added.saturating_add(bytes) <= byte_budget {
-                attach_web_assets(&mut services[index], item["result"].clone());
+        keep_assets(joined);
+    }
+    while let Ok((index, progress)) = summary_rx.try_recv() {
+        summary_progress.insert(index, progress);
+    }
+
+    let mut added = 0usize;
+    let mut counts = BTreeMap::new();
+    let mut queue_ms = 0u64;
+    let mut request_ms = 0u64;
+    // Commit tiny status records before any response payloads, then give the
+    // sanitized summaries priority over the optional page assets.
+    if config.xmrig_summary {
+        let mut summaries = Vec::with_capacity(eligible.len());
+        for index in eligible {
+            let mut summary = match summary_progress.remove(&index) {
+                Some(SummaryProgress::Finished(outcome)) => outcome,
+                Some(SummaryProgress::Started { at, host }) => SummaryProbe {
+                    status: if cancel_requested.load(Ordering::Relaxed) {
+                        "cancelled"
+                    } else {
+                        "timeout"
+                    },
+                    host,
+                    queue_ms: at.duration_since(started).as_millis() as u64,
+                    request_ms: at.elapsed().as_millis() as u64,
+                    ..SummaryProbe::not_attempted()
+                },
+                None => SummaryProbe::not_attempted(),
+            };
+            queue_ms += summary.queue_ms;
+            request_ms += summary.request_ms;
+            let meta = summary.metadata();
+            // Leave room to replace the status if the response does not fit.
+            let status_reserve = "budget_exceeded".len().saturating_sub(summary.status.len());
+            let new_data_bytes = if services[index].data.is_none() {
+                br#"{"schema_version":2,"evidence":[]}"#.len() - b"null".len()
+            } else {
+                0
+            };
+            let bytes = serde_json::to_vec(&meta).map_or(usize::MAX, |bytes| {
+                bytes.len() + br#","xmrig_probe":"#.len() + status_reserve + new_data_bytes
+            });
+            if added.saturating_add(bytes) <= byte_budget
+                && let Some(data) = service_data_mut(&mut services[index]).as_object_mut()
+            {
+                data.insert("xmrig_probe".into(), meta);
                 added += bytes;
-                enriched += 1;
+            } else {
+                summary.status = "budget_exceeded";
+                summary.response = None;
+                if let Some(data) = services[index].data.as_mut()
+                    && data["product_evidence_truncated"] == false
+                {
+                    data["product_evidence_truncated"] = json!(true);
+                }
             }
+            summaries.push((index, summary));
+        }
+        for (index, summary) in summaries {
+            let mut status = summary.status;
+            if let Some(response) = summary.response {
+                let result = json!({"xmrig_summary": response});
+                let bytes = asset_cost(&result);
+                if added.saturating_add(bytes) <= byte_budget
+                    && attach_web_assets(&mut services[index], result)
+                {
+                    added += bytes;
+                } else {
+                    status = "budget_exceeded";
+                    if let Some(data) = services[index].data.as_mut() {
+                        data["xmrig_probe"]["status"] = json!(status);
+                    }
+                }
+            }
+            *counts.entry(status).or_insert(0usize) += 1;
+        }
+    }
+    let mut enriched = 0;
+    for (index, result, bytes) in assets {
+        if added.saturating_add(bytes) <= byte_budget
+            && attach_web_assets(&mut services[index], result)
+        {
+            added += bytes;
+            enriched += 1;
         }
     }
     tracing::info!(
@@ -689,6 +1015,9 @@ pub(crate) async fn enrich_block(
         enriched_count = enriched,
         added_bytes = added,
         aborted,
+        xmrig_outcomes = ?counts,
+        xmrig_queue_ms_total = queue_ms,
+        xmrig_request_ms_total = request_ms,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "web content enrichment finished"
     );
@@ -793,7 +1122,7 @@ mod tests {
             .unwrap();
         evidence.push(json!({"module": "https", "result": {"response": {"status_code": 301, "body": "other"}}}));
         let (body, status) = probe_body_and_status(&service);
-        assert_eq!(body.as_deref(), Some("primary"));
+        assert_eq!(body, Some("primary"));
         assert_eq!(status, Some(200));
     }
 
@@ -1000,6 +1329,220 @@ mod tests {
         config.web_content.max_stage_seconds = 15;
         config.connect_timeout_seconds = 2;
         config
+    }
+
+    #[tokio::test]
+    async fn xmrig_collects_only_when_enabled_and_never_follows_redirects() {
+        let body = json!({
+            "kind":"miner","version":"6.24.0","ua":"XMRig/6.24.0 (fixture)",
+            "paused":false,"algorithms":["rx/0"],"hashrate":{"total":[1,null,null]},
+            "worker_id":"do-not-retain"
+        });
+        let (addr, server) = local_server(vec![(
+            "/2/summary".into(),
+            200,
+            "application/json".into(),
+            serde_json::to_vec(&body).unwrap(),
+        )])
+        .await;
+        let mut service = service_with_body("<html>fixture</html>", 200);
+        service.ip = addr.ip().to_string();
+        service.port = addr.port();
+        let mut config = config_for();
+        for enabled in [false, true] {
+            config.xmrig_summary = enabled;
+            let mut observations = [service.clone()];
+            enrich_block(
+                &config,
+                &mut observations,
+                Instant::now() + Duration::from_secs(8),
+                &AtomicBool::new(false),
+                64 * 1024,
+            )
+            .await;
+            let evidence = observations[0].data.as_ref().unwrap()["evidence"]
+                .as_array()
+                .unwrap();
+            let summary = evidence
+                .iter()
+                .find_map(|item| item.pointer("/result/xmrig_summary"));
+            assert_eq!(summary.is_some(), enabled);
+            if let Some(summary) = summary {
+                let saved: Value = serde_json::from_str(summary["body"].as_str().unwrap()).unwrap();
+                assert_eq!(saved["ua"], "XMRig/6.24.0");
+                assert!(saved.get("worker_id").is_none());
+            }
+        }
+        server.abort();
+
+        let (addr, redirect) = local_server_with_location(
+            vec![
+                ("/2/summary".into(), 302, "text/html".into(), Vec::new()),
+                (
+                    "/destination".into(),
+                    200,
+                    "application/json".into(),
+                    serde_json::to_vec(&body).unwrap(),
+                ),
+            ],
+            "/destination".into(),
+        )
+        .await;
+        service.port = addr.port();
+        let mut observations = [service];
+        enrich_block(
+            &config,
+            &mut observations,
+            Instant::now() + Duration::from_secs(8),
+            &AtomicBool::new(false),
+            64 * 1024,
+        )
+        .await;
+        let evidence = observations[0].data.as_ref().unwrap()["evidence"]
+            .as_array()
+            .unwrap();
+        assert!(
+            evidence
+                .iter()
+                .all(|item| item.pointer("/result/xmrig_summary").is_none())
+        );
+        redirect.abort();
+    }
+
+    #[test]
+    fn xmrig_summary_contract_matches_the_server_fixtures() {
+        // Keep this fixture in sync with network-mapping's service_products tests.
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("xmrig_summary_fixtures.json")).unwrap();
+        for case in cases {
+            let summary = sanitize_miner_summary(case["body"].to_string().as_bytes());
+            assert_eq!(
+                summary.is_some(),
+                case["expected"] != "invalid",
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn xmrig_summary_survives_stalled_assets_and_uses_the_configured_host() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let port = address.port();
+        let body = json!({
+            "kind":"miner","version":"6.24.0","ua":"XMRig/6.24.0",
+            "paused":false,"algorithms":["rx/0"],"hashrate":{"total":[1,null,null]}
+        })
+        .to_string();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut bytes = [0; 4096];
+                    let size = socket.read(&mut bytes).await.unwrap();
+                    let request = String::from_utf8_lossy(&bytes[..size]).to_ascii_lowercase();
+                    if request.starts_with("get /2/summary ") {
+                        if request.contains("\r\nhost: slow.example:") {
+                            std::future::pending::<()>().await;
+                        }
+                        let host = format!("\r\nhost: inventory.example:{port}\r\n");
+                        let (status, body) = if request.contains(&host) {
+                            (200, body.as_str())
+                        } else {
+                            (403, "")
+                        };
+                        let response = format!(
+                            "HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                });
+            }
+        });
+        let mut service = service_with_body("<html>fixture</html>", 200);
+        service.ip = address.ip().to_string();
+        service.port = port;
+        let mut config = config_for();
+        config.xmrig_summary = true;
+        config.probe_options.server_name = Some("inventory.example".into());
+        let mut services = [service.clone()];
+        enrich_block(
+            &config,
+            &mut services,
+            Instant::now() + Duration::from_millis(750),
+            &AtomicBool::new(false),
+            4096,
+        )
+        .await;
+        let data = services[0].data.as_ref().unwrap();
+        assert_eq!(data["xmrig_probe"]["status"], "success");
+        assert_eq!(data["xmrig_probe"]["host"], "inventory.example");
+        assert_eq!(
+            data.pointer("/evidence/1/result/xmrig_summary/request/host"),
+            Some(&json!("inventory.example"))
+        );
+        assert!(data.pointer("/evidence/1/result/favicon").is_none());
+
+        config.probe_options.server_name = Some("slow.example".into());
+        let mut services = [service];
+        enrich_block(
+            &config,
+            &mut services,
+            Instant::now() + Duration::from_millis(750),
+            &AtomicBool::new(false),
+            4096,
+        )
+        .await;
+        server.abort();
+        let data = services[0].data.as_ref().unwrap();
+        assert_eq!(data["xmrig_probe"]["status"], "timeout");
+        assert_eq!(data["xmrig_probe"]["host"], "slow.example");
+        assert!(!has_web_assets(&services[0]));
+    }
+
+    #[tokio::test]
+    async fn xmrig_records_authentication_and_budget_failures() {
+        let summary = json!({
+            "kind":"miner","version":"6.24.0","ua":"XMRig/6.24.0",
+            "paused":false,"algorithms":["rx/0"],"hashrate":{"total":[1,null,null]}
+        });
+        let mut config = config_for();
+        config.xmrig_summary = true;
+        for (status, budget, expected) in
+            [(401, 4096, "auth_required"), (200, 128, "budget_exceeded")]
+        {
+            let (address, server) = local_server(vec![(
+                "/2/summary".into(),
+                status,
+                "application/json".into(),
+                summary.to_string().into_bytes(),
+            )])
+            .await;
+            let mut service = service_with_body("<html>fixture</html>", 200);
+            service.ip = address.ip().to_string();
+            service.port = address.port();
+            let mut services = [service];
+            let added = enrich_block(
+                &config,
+                &mut services,
+                Instant::now() + Duration::from_secs(2),
+                &AtomicBool::new(false),
+                budget,
+            )
+            .await;
+            server.abort();
+            let data = services[0].data.as_ref().unwrap();
+            assert!(added <= budget);
+            assert_eq!(data["xmrig_probe"]["status"], expected);
+            assert_eq!(data["xmrig_probe"]["status_code"], status);
+            assert!(!has_web_assets(&services[0]));
+        }
     }
 
     #[tokio::test]

@@ -31,6 +31,8 @@ server_rate_limit = 10
 connect_timeout_seconds = 5
 target_timeout_seconds = 15
 max_result_bytes = 65536
+# Opt in to the read-only XMRig summary request on detected HTTP(S) services.
+xmrig_summary = false
 
 [dns]
 enabled = true

@@ -262,15 +262,29 @@ probe_timeout_seconds = 5
 
 ## 服务产品识别
 
-扫描器继续上传 `http`、`https`、`tls`、`ssh` 等既有 `service` 协议结果及其原始观察。已有 Web 技术栈和旧 C2 指纹结果继续由配套服务端处理；本次为同一端点的已执行探测保留有预算的补充观察，供服务端生成通用的 `products[]` 与 `product_identification`。
+扫描器继续上传 `http`、`https`、`tls`、`ssh` 等既有 `service` 协议结果及其原始观察。扫描器为同一端点的已执行探测保留有预算的补充观察。配套服务端规则 v8 将 C2 部署候选和 XMRig 服务声明写入 `products[]`，通过 `product_identification` 返回判定状态。Web 技术栈和旧 C2 指纹继续由服务端处理。
 
-扫描器负责采集和上传，产品匹配由服务端完成。服务端规则支持 nginx、Apache HTTP Server、OpenSSH 软件声明，Cobalt Strike、AsyncRAT / DcRAT、Sliver 和 QakBot 证书候选，以及 Mythic Web UI 和 Empire / Starkiller 管理页候选。管理页规则复用已保存的 HTTP/HTTPS 正文和符合规则条件的 `web_assets` 同源落地页。[服务端产品表](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#当前支持与判断范围)
+扫描器负责采集和上传，产品匹配由服务端完成。服务端规则支持 XMRig 软件声明、Cobalt Strike、AsyncRAT / DcRAT、Sliver 和 QakBot 证书候选，以及 Mythic Web UI 和 Empire / Starkiller 管理页候选。管理页规则复用已保存的 HTTP/HTTPS 正文和符合规则条件的 `web_assets` 同源落地页。[服务端产品表](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#当前支持与判断范围)
 
 扫描器在选中服务握手之后，按 TLS、HTTP、HTTPS 顺序尽量保留每个模块的一份成功补充观察。补充证据总量最多两倍 `service_detection.max_result_bytes`，仍受既有 64 MiB 结果块限制；超预算省略的补充观察通过 `data.product_evidence_truncated=true` 标记。已自包含 TLS 日志的应用握手不重复保存独立 TLS 观察。失败 TLS 中可用的公开证书沿用原有保留策略。原协议名、置信度、探测计划、取消恢复及网页内容富化开关保持原义。
 
-控制台「服务」列同时显示协议与产品。证书和管理页规则产生端口级「疑似」候选。服务端规则可直接使用旧扫描器已保存的字段，无需调整节点配置或增加探测请求。额外的 JARM 连接由独立配置控制。[产品查询与存量回填](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#服务产品识别)
+控制台「服务」列并列显示协议、C2 候选及 XMRig 软件声明。证书和管理页规则产生端口级「疑似」结果。普通 Web 组件仍显示在「技术栈」列，SSH 软件声明保留在握手证据中。C2 规则可直接使用旧扫描器已保存的字段。XMRig 额外采集按下节独立启用。额外的 JARM 连接由独立配置控制。[产品查询与存量回填](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PROTOCOLS.md#服务产品识别)
 
 规则 v6 起，可在服务端配置外部 JSON 规则包。基于已有观察字段添加规则时，扫描器继续按同一格式上传证据。[服务端规则包](https://github.com/wshijiang/network-mapping/blob/main/docs/SERVICE_PRODUCT_RULES.md)
+
+### XMRig 摘要采集
+
+在已授权扫描的节点本地配置中加入以下开关。服务识别和 Web 内容富化均需启用。
+
+```toml
+[service_detection]
+xmrig_summary = true
+```
+
+本选项默认关闭。每个已识别的 HTTP/HTTPS 端点最多增加一次摘要读取，使用原扫描 IP 和端口并沿用 Web 富化的并发、超时、取消和证据大小限制。扫描器使用直接返回的 JSON 摘要，并保留用于复核的有限字段。配套服务端 v8 将该观察投影为 `product = xmrig`，版本采用服务自报的版本。需使用新版服务识别 worker。
+
+配置 `service_detection.probe_options.server_name` 后，摘要请求会使用该域名作为 HTTP Host 和 HTTPS SNI，连接仍固定在原 IP 和端口。扫描器单独记录摘要采集状态。先完成的摘要会优先占用结果空间，后续网页资源超时仍可保留摘要。
+
 
 ### Sliver 与 QakBot 产品候选
 

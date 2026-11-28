@@ -41,6 +41,8 @@ connect_timeout_seconds = 5
 target_timeout_seconds = 15
 # Maximum structured zgrab2 detail retained per service result.
 max_result_bytes = 65536
+# Opt in to the read-only XMRig summary request on detected HTTP(S) services.
+xmrig_summary = false
 
 # Optional active TLS fingerprinting: 10 extra connections per observed TLS endpoint.
 # Local and remote configuration must both allow collection.
