@@ -283,6 +283,8 @@ xmrig_summary = true
 
 本选项默认关闭。每个已识别的 HTTP/HTTPS 端点最多增加一次摘要读取，使用原扫描 IP 和端口并沿用 Web 富化的并发、超时、取消和证据大小限制。扫描器使用直接返回的 JSON 摘要，并保留用于复核的有限字段。配套服务端 v8 将该观察投影为 `product = xmrig`，版本采用服务自报的版本。需使用新版服务识别 worker。
 
+配置 `service_detection.probe_options.server_name` 后，摘要请求会使用该域名作为 HTTP Host 和 HTTPS SNI，连接仍固定在原 IP 和端口。扫描器单独记录摘要采集状态。先完成的摘要会优先占用结果空间，后续网页资源超时仍可保留摘要。
+
 
 ### Sliver 与 QakBot 产品候选
 
